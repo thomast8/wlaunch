@@ -295,8 +295,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "f":
 		if m.focus == focusMain && m.view == model.ViewBranches {
-			m.status = "fetching…"
-			return m, fetchCmd(m.scopedPath(), m.gen)
+			if b := m.selectedBranch(); b != nil {
+				m.status = "fetching " + b.Name + "…"
+				return m, fetchBranchCmd(m.scopedPath(), *b, m.gen)
+			}
 		}
 		return m, nil
 	case "p":

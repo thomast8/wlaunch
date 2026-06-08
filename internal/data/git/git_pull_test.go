@@ -19,8 +19,8 @@ func findBranch(bs []model.Branch, name string) *model.Branch {
 }
 
 // TestFetchAndPullReal builds a real bare remote + two clones, advances a branch on
-// the remote, and exercises Fetch + PullBranch (the non-current fast-forward path,
-// which is the novel one). Self-contained, so it runs in the normal suite.
+// the remote, and exercises FetchBranch + PullBranch (the non-current fast-forward
+// path, which is the novel one). Self-contained, so it runs in the normal suite.
 func TestFetchAndPullReal(t *testing.T) {
 	ctx := context.Background()
 	cfg := []string{"-c", "user.email=t@e", "-c", "user.name=t"}
@@ -55,13 +55,18 @@ func TestFetchAndPullReal(t *testing.T) {
 	run(worker, append(cfg, "commit", "-q", "--allow-empty", "-m", "c2")...)
 	run(worker, "push", "-q", "origin", "feat")
 
-	// local Fetch -> feat is behind 1, and not current
-	if err := Fetch(ctx, local); err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
+	// local FetchBranch(feat) -> feat is behind 1, and not current. We must read the
+	// branch (for its upstream) before fetching; FetchBranch only touches feat's ref.
 	feat := findBranch(mustBranches(t, ctx, local), "feat")
 	if feat == nil {
 		t.Fatal("no feat branch")
+	}
+	if err := FetchBranch(ctx, local, *feat); err != nil {
+		t.Fatalf("FetchBranch: %v", err)
+	}
+	feat = findBranch(mustBranches(t, ctx, local), "feat")
+	if feat == nil {
+		t.Fatal("no feat branch after fetch")
 	}
 	if feat.IsCurrent {
 		t.Fatal("feat should not be current (main is)")
@@ -116,10 +121,14 @@ func TestPullCheckedOutWorktreeReal(t *testing.T) {
 	run(worker, append(cfg, "commit", "-q", "--allow-empty", "-m", "c2")...)
 	run(worker, "push", "-q", "origin", "feat")
 
-	if err := Fetch(ctx, local); err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
 	feat := findBranch(mustBranches(t, ctx, local), "feat")
+	if feat == nil {
+		t.Fatal("no feat branch")
+	}
+	if err := FetchBranch(ctx, local, *feat); err != nil {
+		t.Fatalf("FetchBranch: %v", err)
+	}
+	feat = findBranch(mustBranches(t, ctx, local), "feat")
 	if feat == nil || feat.Behind != 1 {
 		t.Fatalf("feat = %+v, want behind 1", feat)
 	}

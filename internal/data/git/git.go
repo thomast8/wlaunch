@@ -138,38 +138,54 @@ func RemoveWorktree(ctx context.Context, repo, path string) error {
 	return err
 }
 
-// Fetch updates all remote-tracking refs, refreshing the ahead/behind the Branches
-// view shows. It touches no working tree or local branches, so it's always safe.
-// --prune also cleans up deleted remote branches, but some repos have ref D/F
-// conflicts that make its deletes fail to lock ("cannot lock ref ..."); the fetch
-// itself still succeeded, so on a prune failure we fall back to a plain --all fetch
-// (a cheap no-op re-check, since the refs already updated) for a clean exit.
-func Fetch(ctx context.Context, repo string) error {
-	if _, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", "--all", "--prune"); err == nil {
-		return nil
+// FetchBranch updates only the selected branch's upstream remote-tracking ref.
+// `--refmap=` disables git's opportunistic refresh of EVERY remote-tracking ref (the
+// configured `refs/heads/*:refs/remotes/...` refspec) — that opportunistic pass is
+// what trips over a single broken/un-lockable ref in the repo and fails the whole
+// fetch. We instead name just this branch's tracking ref via an explicit refspec.
+func FetchBranch(ctx context.Context, repo string, b model.Branch) error {
+	remote, ref, err := splitUpstream(b.Upstream)
+	if err != nil {
+		return err
 	}
-	_, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", "--all")
+	_, err = data.Run(ctx, repo, "git", "-C", repo, "fetch", "--refmap=", remote, trackRefspec(remote, ref))
 	return err
 }
 
-// PullBranch fast-forwards a branch to its upstream. If the branch is checked out
-// (the main repo or a worktree), checkoutPath points there and we `pull --ff-only`
-// in place — you can't update a checked-out branch's ref from outside it. A branch
-// checked out nowhere is fast-forwarded via a `fetch <remote> ref:branch` refspec.
-// Both refuse a non-fast-forward, so a diverged branch errors rather than losing
-// commits.
+// PullBranch fast-forwards a branch to its upstream. It refreshes the branch's
+// tracking ref (refmap-scoped, so a broken ref elsewhere can't fail it) then
+// fast-forwards: in place via `merge --ff-only` for a checked-out branch (you can't
+// update a checked-out ref from outside it), or via an explicit ff-only refspec for
+// one checked out nowhere. The ff-only step refuses a non-fast-forward, so a diverged
+// branch errors rather than losing commits.
 func PullBranch(ctx context.Context, repo string, b model.Branch, checkoutPath string) error {
-	if b.Upstream == "" {
-		return errors.New("no upstream")
-	}
-	if checkoutPath != "" {
-		_, err := data.Run(ctx, checkoutPath, "git", "-C", checkoutPath, "pull", "--ff-only")
+	remote, ref, err := splitUpstream(b.Upstream)
+	if err != nil {
 		return err
 	}
-	remote, ref, ok := strings.Cut(b.Upstream, "/")
-	if !ok || remote == "" || ref == "" {
-		return fmt.Errorf("unexpected upstream %q", b.Upstream)
+	if checkoutPath != "" {
+		if _, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", "--refmap=", remote, trackRefspec(remote, ref)); err != nil {
+			return err
+		}
+		_, err := data.Run(ctx, checkoutPath, "git", "-C", checkoutPath, "merge", "--ff-only", "@{u}")
+		return err
 	}
-	_, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", remote, ref+":"+b.Name)
+	_, err = data.Run(ctx, repo, "git", "-C", repo, "fetch", "--refmap=", remote, trackRefspec(remote, ref), ref+":"+b.Name)
 	return err
+}
+
+// trackRefspec force-updates exactly one remote-tracking ref.
+func trackRefspec(remote, ref string) string {
+	return "+" + ref + ":refs/remotes/" + remote + "/" + ref
+}
+
+func splitUpstream(upstream string) (remote, ref string, err error) {
+	if upstream == "" {
+		return "", "", errors.New("no upstream")
+	}
+	r, br, ok := strings.Cut(upstream, "/")
+	if !ok || r == "" || br == "" {
+		return "", "", fmt.Errorf("unexpected upstream %q", upstream)
+	}
+	return r, br, nil
 }

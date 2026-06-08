@@ -20,14 +20,14 @@ func branchesView(t *testing.T) Model {
 }
 
 func TestFetchKeyKicksRefresh(t *testing.T) {
-	m := branchesView(t)
+	m := branchesView(t) // cursor 0 = "main" (has upstream, from loadedModel)
 	nm, cmd := m.Update(key("f"))
 	m = nm.(Model)
 	if cmd == nil {
 		t.Error("f should return a fetch command")
 	}
-	if m.status != "fetching…" {
-		t.Errorf("status = %q, want 'fetching…'", m.status)
+	if !strings.HasPrefix(m.status, "fetching ") {
+		t.Errorf("status = %q, want 'fetching <branch>…'", m.status)
 	}
 }
 

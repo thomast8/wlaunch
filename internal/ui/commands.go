@@ -121,13 +121,13 @@ type branchesRefreshedMsg struct {
 	status   string
 }
 
-func fetchCmd(repo string, gen uint64) tea.Cmd {
+func fetchBranchCmd(repo string, b model.Branch, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		status := "✓ fetched"
-		if err := git.Fetch(ctx, repo); err != nil {
-			status = "fetch failed: " + friendly(err)
+		status := "✓ fetched " + b.Name
+		if err := git.FetchBranch(ctx, repo, b); err != nil {
+			status = b.Name + ": " + friendly(err)
 		}
 		br, err := git.ListBranches(ctx, repo)
 		if err != nil {
@@ -173,6 +173,10 @@ func friendly(err error) string {
 		return "checked out elsewhere"
 	case strings.Contains(s, "non-fast-forward"), strings.Contains(s, "rejected"), strings.Contains(s, "Not possible to fast-forward"), strings.Contains(s, "diverging"):
 		return "diverged — can't fast-forward"
+	case strings.Contains(s, "couldn't find remote ref"):
+		return "upstream gone from remote"
+	case strings.Contains(s, "cannot lock ref"), strings.Contains(s, "could not delete references"):
+		return "a remote-tracking ref is broken (case-colliding ref?)"
 	default:
 		if len(s) > 90 {
 			s = s[:90] + "…"
