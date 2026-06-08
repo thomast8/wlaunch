@@ -176,9 +176,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		m.status = removalStatus(msg.removed, msg.failed)
-		m.state[model.ViewWorktrees] = stateLoading
-		return m, tea.Batch(m.spinner.Tick, loadWorktreesCmd(m.scopedPath(), m.gen))
+		if len(msg.removed) > 0 {
+			gone := make(map[string]bool, len(msg.removed))
+			for _, p := range msg.removed {
+				gone[p] = true
+			}
+			kept := make([]model.Worktree, 0, len(m.worktrees))
+			for _, wt := range m.worktrees {
+				if !gone[wt.Path] {
+					kept = append(kept, wt)
+				}
+			}
+			m.worktrees = kept
+			m.state[model.ViewWorktrees] = readyOrEmpty(len(m.worktrees))
+			if m.view == model.ViewWorktrees {
+				m.clampCursor()
+			}
+		}
+		m.status = removalStatus(len(msg.removed), msg.failed)
+		return m, nil
 
 	case loadErrMsg:
 		if msg.gen != m.gen {
@@ -325,9 +341,8 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(paths) == 0 {
 			return m, nil
 		}
-		m.status = ""
-		m.state[model.ViewWorktrees] = stateLoading
-		return m, tea.Batch(m.spinner.Tick, removeWorktreesCmd(m.scopedPath(), paths, m.gen))
+		m.status = "removing…"
+		return m, removeWorktreesCmd(m.scopedPath(), paths, m.gen)
 	default: // n / esc / anything else cancels
 		m.confirm = confirmNone
 		m.confirmPaths = nil

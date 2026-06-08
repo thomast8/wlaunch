@@ -59,10 +59,32 @@ func TestRemoveOneConfirmYesKicksRemoval(t *testing.T) {
 		t.Errorf("y should clear the confirm")
 	}
 	if cmd == nil {
-		t.Errorf("y should return the removal+reload command")
+		t.Errorf("y should return the removal command")
 	}
-	if m.state[model.ViewWorktrees] != stateLoading {
-		t.Errorf("worktrees should be loading after removal kicks off")
+	if m.status != "removing…" {
+		t.Errorf("expected a 'removing…' status, got %q", m.status)
+	}
+}
+
+// TestRemovalSplicesInMemory is the guard for the "don't re-read all of them" fix:
+// the removed-result message must splice the path out of the in-memory list and
+// issue NO reload command.
+func TestRemovalSplicesInMemory(t *testing.T) {
+	m := worktreeModel(t)
+	before := len(m.worktrees)
+	nm, cmd := m.Update(worktreesRemovedMsg{gen: m.gen, removed: []string{"/wt/pr289"}, failed: 0})
+	m = nm.(Model)
+	if cmd != nil {
+		t.Errorf("in-memory splice should issue no reload command")
+	}
+	if len(m.worktrees) != before-1 {
+		t.Errorf("worktrees not spliced: before=%d after=%d", before, len(m.worktrees))
+	}
+	if m.worktreeByPath("/wt/pr289") != nil {
+		t.Errorf("/wt/pr289 should be gone from the in-memory list")
+	}
+	if m.state[model.ViewWorktrees] != stateReady {
+		t.Errorf("state should stay ready (no reload spinner), got %v", m.state[model.ViewWorktrees])
 	}
 }
 

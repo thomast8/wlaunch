@@ -88,22 +88,24 @@ func loadWorktreesCmd(repo string, gen uint64) tea.Cmd {
 
 type worktreesRemovedMsg struct {
 	gen     uint64
-	removed int
+	removed []string // paths git actually removed (so the model can splice them out)
 	failed  int
 }
 
 // removeWorktreesCmd removes each path (one for single-remove, many for remove-all)
-// and reports counts; git.RemoveWorktree refuses dirty ones, so those land in failed.
+// and returns the paths that succeeded; git.RemoveWorktree refuses dirty ones, so
+// those land in failed. The caller splices `removed` out of its list (no re-read).
 func removeWorktreesCmd(repo string, paths []string, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		var removed, failed int
+		var removed []string
+		var failed int
 		for _, p := range paths {
 			if err := git.RemoveWorktree(ctx, repo, p); err != nil {
 				failed++
 			} else {
-				removed++
+				removed = append(removed, p)
 			}
 		}
 		return worktreesRemovedMsg{gen: gen, removed: removed, failed: failed}
