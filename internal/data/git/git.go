@@ -128,3 +128,10 @@ func ListWorktrees(ctx context.Context, repo string) ([]model.Worktree, error) {
 	}
 	return parseWorktrees(b), nil
 }
+
+// RemoveWorktree removes a worktree (its working dir + admin link). No --force, so
+// git refuses if the worktree has uncommitted changes; the branch and commits stay.
+func RemoveWorktree(ctx context.Context, repo, path string) error {
+	_, err := data.Run(ctx, repo, "git", "-C", repo, "worktree", "remove", path)
+	return err
+}

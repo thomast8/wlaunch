@@ -42,6 +42,15 @@ const (
 	inputNewBranch
 )
 
+// confirmMode gates the destructive worktree-removal actions behind a y/n prompt.
+type confirmMode int
+
+const (
+	confirmNone confirmMode = iota
+	confirmRemoveOne
+	confirmRemoveAll
+)
+
 const viewN = 3 // PRs, Branches, Worktrees (repos live in the sidebar, not a view)
 
 // rowData is the per-view uniform row: how to render it, how to filter it, and
@@ -80,6 +89,10 @@ type Model struct {
 	inMode    inputMode
 	filter    textinput.Model
 	nameInput textinput.Model
+
+	confirm      confirmMode // pending y/n for a worktree removal
+	confirmPaths []string    // worktree paths queued for removal
+	status       string      // transient result line (e.g. "removed 3 · 1 skipped")
 
 	selection *model.Selection
 	quit      bool
@@ -154,7 +167,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.worktrees = msg.worktrees
 		m.state[model.ViewWorktrees] = readyOrEmpty(len(m.worktrees))
+		if m.view == model.ViewWorktrees {
+			m.clampCursor()
+		}
 		return m, nil
+
+	case worktreesRemovedMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.status = removalStatus(msg.removed, msg.failed)
+		m.state[model.ViewWorktrees] = stateLoading
+		return m, tea.Batch(m.spinner.Tick, loadWorktreesCmd(m.scopedPath(), m.gen))
 
 	case loadErrMsg:
 		if msg.gen != m.gen {
@@ -199,6 +223,7 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 	m.gen++
 	m.prs, m.branches, m.worktrees = nil, nil, nil
 	m.cursor = [viewN]int{}
+	m.confirm, m.confirmPaths, m.status = confirmNone, nil, "" // drop any pending remove
 	m.state[model.ViewPRs] = stateLoading
 	m.state[model.ViewBranches] = stateLoading
 	m.state[model.ViewWorktrees] = stateLoading
@@ -216,14 +241,28 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quit = true
 		return m, tea.Quit
 	}
+	if m.confirm != confirmNone {
+		return m.handleConfirmKey(msg)
+	}
 	if m.inMode != inputNone {
 		return m.handleInputKey(msg)
 	}
+	m.status = "" // any normal key clears the transient result line
 
 	switch msg.String() {
 	case "q", "esc":
 		m.quit = true
 		return m, tea.Quit
+	case "d":
+		if m.focus == focusMain && m.view == model.ViewWorktrees {
+			return m.askRemoveOne()
+		}
+		return m, nil
+	case "D":
+		if m.focus == focusMain && m.view == model.ViewWorktrees {
+			return m.askRemoveAll()
+		}
+		return m, nil
 	case "/":
 		m.inMode = inputFilter
 		return m, m.filter.Focus()
@@ -274,6 +313,90 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.launch(model.TargetSerie)
 	}
 	return m, nil
+}
+
+// handleConfirmKey resolves a pending worktree-removal y/n prompt.
+func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		paths := m.confirmPaths
+		m.confirm = confirmNone
+		m.confirmPaths = nil
+		if len(paths) == 0 {
+			return m, nil
+		}
+		m.status = ""
+		m.state[model.ViewWorktrees] = stateLoading
+		return m, tea.Batch(m.spinner.Tick, removeWorktreesCmd(m.scopedPath(), paths, m.gen))
+	default: // n / esc / anything else cancels
+		m.confirm = confirmNone
+		m.confirmPaths = nil
+		return m, nil
+	}
+}
+
+func (m Model) askRemoveOne() (tea.Model, tea.Cmd) {
+	wt := m.selectedWorktree()
+	if wt == nil {
+		return m, nil
+	}
+	if wt.IsMain {
+		m.status = "can't remove the main checkout"
+		return m, nil
+	}
+	m.confirm = confirmRemoveOne
+	m.confirmPaths = []string{wt.Path}
+	return m, nil
+}
+
+func (m Model) askRemoveAll() (tea.Model, tea.Cmd) {
+	var paths []string
+	for _, rd := range m.visibleRows() { // visible = respects the filter, minus main
+		if wt := m.worktreeByPath(rd.ref); wt != nil && !wt.IsMain {
+			paths = append(paths, wt.Path)
+		}
+	}
+	if len(paths) == 0 {
+		m.status = "no removable worktrees here"
+		return m, nil
+	}
+	m.confirm = confirmRemoveAll
+	m.confirmPaths = paths
+	return m, nil
+}
+
+func (m Model) selectedWorktree() *model.Worktree {
+	if m.view != model.ViewWorktrees {
+		return nil
+	}
+	vis := m.visibleRows()
+	c := m.cursor[m.view]
+	if c < 0 || c >= len(vis) {
+		return nil
+	}
+	return m.worktreeByPath(vis[c].ref)
+}
+
+func (m Model) worktreeByPath(path string) *model.Worktree {
+	for i := range m.worktrees {
+		if m.worktrees[i].Path == path {
+			return &m.worktrees[i]
+		}
+	}
+	return nil
+}
+
+func removalStatus(removed, failed int) string {
+	switch {
+	case removed == 0 && failed == 0:
+		return "nothing removed"
+	case failed == 0:
+		return fmt.Sprintf("✓ removed %d worktree(s)", removed)
+	case removed == 0:
+		return fmt.Sprintf("⚠ removed none · %d skipped (dirty/locked)", failed)
+	default:
+		return fmt.Sprintf("✓ removed %d · %d skipped (dirty/locked)", removed, failed)
+	}
 }
 
 // launch routes a target key to the sidebar (open the repo root) or the panel
@@ -508,6 +631,18 @@ func (m Model) renderHeader(w int) string {
 func (m Model) renderFooter(w int) string {
 	var hint string
 	switch {
+	case m.confirm == confirmRemoveOne:
+		name := "this worktree"
+		if len(m.confirmPaths) > 0 {
+			name = filepath.Base(m.confirmPaths[0])
+		}
+		hint = styErr.Render("Remove worktree "+name+"? (branch kept)  ") +
+			styHeading.Render("y") + styHint.Render(" yes · ") + styHeading.Render("n") + styHint.Render(" cancel")
+	case m.confirm == confirmRemoveAll:
+		hint = styErr.Render(fmt.Sprintf("Remove ALL %d worktrees here? (branches kept)  ", len(m.confirmPaths))) +
+			styHeading.Render("y") + styHint.Render(" yes · ") + styHeading.Render("n") + styHint.Render(" cancel")
+	case m.status != "":
+		hint = styHeading.Render(m.status)
 	case m.inMode == inputFilter:
 		hint = "filter: " + m.filter.View() + styHint.Render("   enter apply · esc clear")
 	case m.inMode == inputNewBranch:
@@ -519,6 +654,9 @@ func (m Model) renderFooter(w int) string {
 		extra := ""
 		if m.view == model.ViewBranches {
 			extra = "n new · "
+		}
+		if m.view == model.ViewWorktrees {
+			extra = "d remove · D all · "
 		}
 		hint = styHint.Render("←→ view · ↑↓ move · o open · c claude · l lazygit · s serie · "+extra+"/ filter · ") +
 			styHeading.Render("tab → repos") + styHint.Render(" · q quit")

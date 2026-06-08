@@ -86,6 +86,30 @@ func loadWorktreesCmd(repo string, gen uint64) tea.Cmd {
 	}
 }
 
+type worktreesRemovedMsg struct {
+	gen     uint64
+	removed int
+	failed  int
+}
+
+// removeWorktreesCmd removes each path (one for single-remove, many for remove-all)
+// and reports counts; git.RemoveWorktree refuses dirty ones, so those land in failed.
+func removeWorktreesCmd(repo string, paths []string, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var removed, failed int
+		for _, p := range paths {
+			if err := git.RemoveWorktree(ctx, repo, p); err != nil {
+				failed++
+			} else {
+				removed++
+			}
+		}
+		return worktreesRemovedMsg{gen: gen, removed: removed, failed: failed}
+	}
+}
+
 // friendly maps a raw subprocess error to a short, human line for an error state.
 func friendly(err error) string {
 	s := err.Error()
