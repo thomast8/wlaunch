@@ -47,13 +47,30 @@ The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
 | `n` (branches) | create a new branch worktree |
 | `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
 | `p` (branches) | pull / fast-forward the selected branch to its upstream (ff-only, safe; in-place for checked-out branches) |
-| `d` (worktrees) | remove the selected worktree (y/n confirm; branch kept, dirty skipped) |
-| `D` (worktrees) | remove all worktrees here (respects the filter; main + dirty skipped) |
+| `d` (branches) | delete the selected branch (y/n; safe `-d`, escalates to a force confirm if unmerged). If it's checked out in a worktree, offers to remove that worktree first, then delete |
+| `D` (branches) | clean (respects the filter): force-delete `gone` branches + safe-delete no-upstream ones (git skips any with unmerged commits; current + checked-out excluded) |
+| `d` (worktrees) | remove the selected worktree (y/n; branch kept, dirty skipped), then offers to delete the now-freed branch |
+| `D` (worktrees) | remove all worktrees here (respects the filter; main + dirty skipped), then offers to delete their freed branches |
 | `/` | filter the current view |
 | `q` / `esc` | cancel |
 
 The sidebar lists your recent repos plus everything under `~/GitRepos`. The `●`
 marks the repo the panel is scoped to.
+
+### Branch status column
+
+The middle column in the Branches view summarizes each branch against its upstream:
+
+| marker | meaning |
+|--------|---------|
+| `✓` | tracks an upstream and is in sync |
+| `↑N` / `↓N` / `↑N↓M` | N commits ahead / behind / both of the upstream |
+| `gone` | had an upstream, but the remote branch was deleted (PR merged/closed) — what `D` force-deletes |
+| `local` | no upstream at all (never pushed); nothing to `p` (pull), and `D` safe-deletes it if it holds no unmerged commits |
+
+Worktree/branch deletion are linked: removing a worktree offers to delete its branch,
+and deleting a checked-out branch offers to remove its worktree first — so a branch
+that's stuck behind a worktree is never a dead end.
 
 ## Build
 

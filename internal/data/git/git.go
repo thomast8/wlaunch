@@ -138,6 +138,19 @@ func RemoveWorktree(ctx context.Context, repo, path string) error {
 	return err
 }
 
+// DeleteBranch removes a local branch. force=false uses `-d` (git refuses a branch
+// that still holds commits not merged into HEAD); force=true uses `-D`. Either way
+// git refuses if the branch is checked out in the main repo or a worktree, so the
+// caller need not pre-check that — but checking lets it give a clearer message.
+func DeleteBranch(ctx context.Context, repo, name string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	_, err := data.Run(ctx, repo, "git", "-C", repo, "branch", flag, name)
+	return err
+}
+
 // FetchBranch updates only the selected branch's upstream remote-tracking ref.
 // `--refmap=` disables git's opportunistic refresh of EVERY remote-tracking ref (the
 // configured `refs/heads/*:refs/remotes/...` refspec) — that opportunistic pass is

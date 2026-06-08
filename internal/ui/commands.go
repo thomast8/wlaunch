@@ -153,6 +153,63 @@ func pullBranchCmd(repo string, b model.Branch, checkoutPath string, gen uint64)
 	}
 }
 
+// branchDeletedMsg is the result of a single-branch delete. On success the model
+// splices the branch out in-memory; on an "unmerged" refusal of a SAFE delete the
+// model escalates to a force confirm (the squash-merge case).
+type branchDeletedMsg struct {
+	gen    uint64
+	name   string
+	forced bool
+	err    error // nil = deleted
+}
+
+func deleteBranchCmd(repo, name string, force bool, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		err := git.DeleteBranch(ctx, repo, name, force)
+		return branchDeletedMsg{gen: gen, name: name, forced: force, err: err}
+	}
+}
+
+// branchCleanTarget pairs a branch with the delete mode cleanup chose for it: force
+// for a gone branch (remote-deleted = done, squash-merge-proof), safe for a
+// no-upstream one (git's merge check then skips any still holding unique commits).
+type branchCleanTarget struct {
+	name  string
+	force bool
+}
+
+type branchesCleanedMsg struct {
+	gen     uint64
+	removed []string // branches git actually deleted (the model splices these out)
+	skipped int      // safe-delete refused (unmerged) or otherwise failed
+}
+
+func cleanBranchesCmd(repo string, targets []branchCleanTarget, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		var removed []string
+		var skipped int
+		for _, t := range targets {
+			if err := git.DeleteBranch(ctx, repo, t.name, t.force); err != nil {
+				skipped++
+			} else {
+				removed = append(removed, t.name)
+			}
+		}
+		return branchesCleanedMsg{gen: gen, removed: removed, skipped: skipped}
+	}
+}
+
+// isUnmerged reports whether a safe (`-d`) delete was refused because the branch
+// still holds commits not merged into HEAD — the only case that warrants offering
+// a force escalation. Any other failure (checked out, etc.) is surfaced as-is.
+func isUnmerged(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not fully merged")
+}
+
 // friendly maps a raw subprocess error to a short, human line for an error state.
 func friendly(err error) string {
 	s := err.Error()
