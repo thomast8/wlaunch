@@ -137,12 +137,12 @@ func fetchCmd(repo string, gen uint64) tea.Cmd {
 	}
 }
 
-func pullBranchCmd(repo string, b model.Branch, gen uint64) tea.Cmd {
+func pullBranchCmd(repo string, b model.Branch, checkoutPath string, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		status := "✓ " + b.Name + " up to date"
-		if err := git.PullBranch(ctx, repo, b); err != nil {
+		if err := git.PullBranch(ctx, repo, b, checkoutPath); err != nil {
 			status = b.Name + ": " + friendly(err)
 		}
 		br, err := git.ListBranches(ctx, repo)

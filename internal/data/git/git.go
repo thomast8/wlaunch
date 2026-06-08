@@ -138,24 +138,32 @@ func RemoveWorktree(ctx context.Context, repo, path string) error {
 	return err
 }
 
-// Fetch updates all remote-tracking refs and prunes deleted ones. It touches no
-// working tree or local branches, so it's always safe — it just refreshes the
-// ahead/behind the Branches view shows.
+// Fetch updates all remote-tracking refs, refreshing the ahead/behind the Branches
+// view shows. It touches no working tree or local branches, so it's always safe.
+// --prune also cleans up deleted remote branches, but some repos have ref D/F
+// conflicts that make its deletes fail to lock ("cannot lock ref ..."); the fetch
+// itself still succeeded, so on a prune failure we fall back to a plain --all fetch
+// (a cheap no-op re-check, since the refs already updated) for a clean exit.
 func Fetch(ctx context.Context, repo string) error {
-	_, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", "--all", "--prune")
+	if _, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", "--all", "--prune"); err == nil {
+		return nil
+	}
+	_, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", "--all")
 	return err
 }
 
-// PullBranch fast-forwards a branch to its upstream. The checked-out branch takes a
-// normal `pull --ff-only`; any other branch is fast-forwarded via a fetch refspec,
-// which refuses a non-fast-forward — so a diverged or elsewhere-checked-out branch
-// errors out rather than losing or rewriting commits.
-func PullBranch(ctx context.Context, repo string, b model.Branch) error {
+// PullBranch fast-forwards a branch to its upstream. If the branch is checked out
+// (the main repo or a worktree), checkoutPath points there and we `pull --ff-only`
+// in place — you can't update a checked-out branch's ref from outside it. A branch
+// checked out nowhere is fast-forwarded via a `fetch <remote> ref:branch` refspec.
+// Both refuse a non-fast-forward, so a diverged branch errors rather than losing
+// commits.
+func PullBranch(ctx context.Context, repo string, b model.Branch, checkoutPath string) error {
 	if b.Upstream == "" {
 		return errors.New("no upstream")
 	}
-	if b.IsCurrent {
-		_, err := data.Run(ctx, repo, "git", "-C", repo, "pull", "--ff-only")
+	if checkoutPath != "" {
+		_, err := data.Run(ctx, checkoutPath, "git", "-C", checkoutPath, "pull", "--ff-only")
 		return err
 	}
 	remote, ref, ok := strings.Cut(b.Upstream, "/")

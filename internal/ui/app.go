@@ -303,7 +303,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focus == focusMain && m.view == model.ViewBranches {
 			if b := m.selectedBranch(); b != nil {
 				m.status = "pulling " + b.Name + "…"
-				return m, pullBranchCmd(m.scopedPath(), *b, m.gen)
+				return m, pullBranchCmd(m.scopedPath(), *b, m.branchCheckoutPath(*b), m.gen)
 			}
 		}
 		return m, nil
@@ -448,6 +448,18 @@ func (m Model) branchByName(name string) *model.Branch {
 		}
 	}
 	return nil
+}
+
+// branchCheckoutPath returns the path where a branch is checked out (the main repo
+// or a worktree), or "" if it isn't checked out anywhere. A checked-out branch must
+// be pulled in place; only an unchecked-out one can be ff'd via a fetch refspec.
+func (m Model) branchCheckoutPath(b model.Branch) string {
+	for _, wt := range m.worktrees {
+		if wt.Branch == b.Name {
+			return wt.Path
+		}
+	}
+	return ""
 }
 
 func removalStatus(removed, failed int) string {
