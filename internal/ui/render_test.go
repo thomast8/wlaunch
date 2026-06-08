@@ -80,7 +80,6 @@ func TestSnapshotAllViews(t *testing.T) {
 	}{
 		{"Branches", tea.KeyMsg{Type: tea.KeyRight}},
 		{"Worktrees", tea.KeyMsg{Type: tea.KeyRight}},
-		{"Repos", tea.KeyMsg{Type: tea.KeyRight}},
 	} {
 		m = step(t, m, v.key)
 		out := m.View()
@@ -91,4 +90,8 @@ func TestSnapshotAllViews(t *testing.T) {
 		}
 		t.Logf("=== %s view ===\n%s", v.name, ansi.Strip(out))
 	}
+
+	// sidebar focused: snapshot to eyeball the focus affordance + scoped marker
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	t.Logf("=== sidebar focused ===\n%s", ansi.Strip(m.View()))
 }

@@ -1,9 +1,10 @@
 # wlaunch
 
 A unified launcher TUI for a git / PR / worktree workflow. One terminal UI that
-replaces a pile of single-purpose launchers: browse a repo's **PRs**, **branches**,
-**worktrees**, or your **recent repos**, then open the selection in `claude`,
-`lazygit`, `serie`, or a plain shell — landing in the right worktree every time.
+replaces a pile of single-purpose launchers: a repo sidebar on the left, and a
+main panel that switches between a repo's **PRs**, **branches**, and **worktrees**.
+Open any selection in `claude`, `lazygit`, `serie`, or a plain shell — landing in
+the right worktree every time.
 
 Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea). Designed to
 drive the [warp-claude-workflow](https://github.com/thomast8/warp-claude-workflow)
@@ -36,15 +37,19 @@ The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
 
 | key | action |
 |-----|--------|
-| `←` / `→` | switch view (PRs · Branches · Worktrees · Repos) |
+| `←` / `→` | switch view (PRs · Branches · Worktrees) |
 | `↑` `↓` / `k` `j` | move within the list |
 | `tab` | toggle focus between the repo sidebar and the panel |
-| `enter` (sidebar) | scope the views to that repo |
-| `o` / `enter` | open (default tool) |
-| `c` / `l` / `s` | open in claude / lazygit / serie |
+| `enter` (sidebar) | scope the panel to that repo |
+| `o` `c` `l` `s` (sidebar) | open the repo root in default / claude / lazygit / serie |
+| `o` / `enter` (panel) | open the selection (default tool) |
+| `c` / `l` / `s` (panel) | open the selection in claude / lazygit / serie |
 | `n` (branches) | create a new branch worktree |
 | `/` | filter the current view |
 | `q` / `esc` | cancel |
+
+The sidebar lists your recent repos plus everything under `~/GitRepos`. The `●`
+marks the repo the panel is scoped to.
 
 ## Build
 

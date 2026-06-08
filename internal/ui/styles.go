@@ -1,10 +1,18 @@
 package ui
 
 import (
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+// renderer detects color from stderr — where the TUI actually renders
+// (tea.WithOutput(os.Stderr)). The default lipgloss renderer probes stdout, but
+// stdout is a captured pipe when wlaunch runs under `wl` (`line="$(wlaunch)"`), so
+// the default would wrongly see no color and strip all styling. Binding detection
+// to stderr keeps colors whether wlaunch is run directly or captured.
+var renderer = lipgloss.NewRenderer(os.Stderr)
 
 // Palette. 256-color codes chosen for legibility on a dark, semi-transparent
 // background (Warp runs with window opacity), so primary text is near-white and
@@ -20,24 +28,26 @@ var (
 )
 
 var (
-	styText    = lipgloss.NewStyle().Foreground(colText)
-	styMeta    = lipgloss.NewStyle().Foreground(colMeta)
-	styHint    = lipgloss.NewStyle().Foreground(colHint)
-	styErr     = lipgloss.NewStyle().Foreground(colErr)
-	styNum     = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
-	styHeading = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	styText    = renderer.NewStyle().Foreground(colText)
+	styMeta    = renderer.NewStyle().Foreground(colMeta)
+	styHint    = renderer.NewStyle().Foreground(colHint)
+	styErr     = renderer.NewStyle().Foreground(colErr)
+	styNum     = renderer.NewStyle().Foreground(colAccent).Bold(true)
+	styHeading = renderer.NewStyle().Foreground(colAccent).Bold(true)
 
-	styTabActive   = lipgloss.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccent).Bold(true)
-	styTabInactive = lipgloss.NewStyle().Foreground(colHint)
+	// Inactive tabs use a brighter grey than footer hints so the tab strip stays
+	// readable on the translucent background; the active tab is a solid accent chip.
+	styTabActive   = renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccent).Bold(true)
+	styTabInactive = renderer.NewStyle().Foreground(lipgloss.Color("250"))
 )
 
 // rowStyle is the highlight bar for the selected row: a strong accent bar in the
 // focused pane, a subtle grey bar in the unfocused one.
 func rowStyle(focused bool) lipgloss.Style {
 	if focused {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccent).Bold(true)
+		return renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccent).Bold(true)
 	}
-	return lipgloss.NewStyle().Foreground(colSelFg).Background(colSelBg)
+	return renderer.NewStyle().Foreground(colSelFg).Background(colSelBg)
 }
 
 // truncate shortens s to at most n display runes, adding an ellipsis when cut.

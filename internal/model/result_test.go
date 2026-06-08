@@ -38,11 +38,11 @@ func TestTargetTool(t *testing.T) {
 }
 
 func TestViewCycleWraps(t *testing.T) {
-	if got := ViewPRs.Prev(); got != ViewRepos {
-		t.Errorf("ViewPRs.Prev() = %v, want ViewRepos", got)
+	if got := ViewPRs.Prev(); got != ViewWorktrees {
+		t.Errorf("ViewPRs.Prev() = %v, want ViewWorktrees", got)
 	}
-	if got := ViewRepos.Next(); got != ViewPRs {
-		t.Errorf("ViewRepos.Next() = %v, want ViewPRs", got)
+	if got := ViewWorktrees.Next(); got != ViewPRs {
+		t.Errorf("ViewWorktrees.Next() = %v, want ViewPRs", got)
 	}
 	if got := ViewPRs.Next(); got != ViewBranches {
 		t.Errorf("ViewPRs.Next() = %v, want ViewBranches", got)

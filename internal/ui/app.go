@@ -42,7 +42,7 @@ const (
 	inputNewBranch
 )
 
-const viewN = 4 // PRs, Branches, Worktrees, Repos
+const viewN = 3 // PRs, Branches, Worktrees (repos live in the sidebar, not a view)
 
 // rowData is the per-view uniform row: how to render it, how to filter it, and
 // what Selection it produces when launched.
@@ -129,7 +129,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		m.state[model.ViewRepos] = stateReady
 		m.scopedIdx, m.sideCur = 0, 0
 		return m, m.scopeReload(0)
 
@@ -250,15 +249,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(1)
 		return m, nil
 	case "l":
-		return m.emit(model.TargetLazygit)
+		return m.launch(model.TargetLazygit)
 	case "n":
-		if m.view == model.ViewBranches {
+		if m.focus == focusMain && m.view == model.ViewBranches {
 			m.inMode = inputNewBranch
 			m.nameInput.SetValue("")
 			return m, m.nameInput.Focus()
 		}
 		return m, nil
 	case "enter":
+		// In the sidebar, enter SCOPES the panel to the repo (the common "drill in"
+		// action); o/c/l/s launch a tool on the repo root instead.
 		if m.focus == focusSidebar {
 			cmd := m.scopeReload(m.sideCur)
 			m.focus = focusMain
@@ -266,13 +267,37 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.emit(model.TargetDefault)
 	case "o":
-		return m.emit(model.TargetDefault)
+		return m.launch(model.TargetDefault)
 	case "c":
-		return m.emit(model.TargetClaude)
+		return m.launch(model.TargetClaude)
 	case "s":
-		return m.emit(model.TargetSerie)
+		return m.launch(model.TargetSerie)
 	}
 	return m, nil
+}
+
+// launch routes a target key to the sidebar (open the repo root) or the panel
+// (open the selected PR/branch/worktree), depending on focus.
+func (m Model) launch(t model.Target) (tea.Model, tea.Cmd) {
+	if m.focus == focusSidebar {
+		return m.emitRepo(t)
+	}
+	return m.emit(t)
+}
+
+// emitRepo launches a tool on the highlighted sidebar repo's root (the claude-here
+// case): kind=repo, empty ref.
+func (m Model) emitRepo(t model.Target) (tea.Model, tea.Cmd) {
+	if m.sideCur < 0 || m.sideCur >= len(m.repos) {
+		return m, nil
+	}
+	m.selection = &model.Selection{
+		Kind:     model.KindRepo,
+		RepoRoot: m.repos[m.sideCur].Path,
+		Ref:      "",
+		Tool:     t.Tool(),
+	}
+	return m, tea.Quit
 }
 
 func (m Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -410,17 +435,6 @@ func (m Model) rows(v model.View) []rowData {
 			})
 		}
 		return out
-	case model.ViewRepos:
-		out := make([]rowData, 0, len(m.repos))
-		for _, r := range m.repos {
-			r := r
-			out = append(out, rowData{
-				kind: model.KindRepo, repoRoot: r.Path, ref: "",
-				filter: r.Name + " " + r.Path,
-				render: func(w int, sel, foc bool) string { return renderRepoRow(r, w, sel, foc) },
-			})
-		}
-		return out
 	}
 	return nil
 }
@@ -478,19 +492,17 @@ func (m Model) renderHeader(w int) string {
 		}
 		return styTabInactive.Render(" " + label + " ")
 	}
-	tabs := tab("PRs", m.view == model.ViewPRs) + " " +
+	left := tab("PRs", m.view == model.ViewPRs) + " " +
 		tab("Branches", m.view == model.ViewBranches) + " " +
-		tab("Worktrees", m.view == model.ViewWorktrees) + " " +
-		tab("Repos", m.view == model.ViewRepos)
-	left := styHint.Render("wlaunch") + "  " + tabs
+		tab("Worktrees", m.view == model.ViewWorktrees)
 	if q := strings.TrimSpace(m.filter.Value()); q != "" {
 		right := styMeta.Render("🔎 " + q)
 		gap := w - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap > 1 {
-			return lipgloss.NewStyle().MaxWidth(w).Render(left + strings.Repeat(" ", gap) + right)
+			return renderer.NewStyle().MaxWidth(w).Render(left + strings.Repeat(" ", gap) + right)
 		}
 	}
-	return lipgloss.NewStyle().Width(w).MaxWidth(w).Render(left)
+	return renderer.NewStyle().Width(w).MaxWidth(w).Render(left)
 }
 
 func (m Model) renderFooter(w int) string {
@@ -501,40 +513,56 @@ func (m Model) renderFooter(w int) string {
 	case m.inMode == inputNewBranch:
 		hint = "new branch: " + m.nameInput.View() + styHint.Render("   enter create · esc cancel")
 	case m.focus == focusSidebar:
-		hint = styHint.Render("↑↓ move · enter scope · ←→ view · tab panel · q quit")
+		hint = styHint.Render("↑↓ repo · enter scope panel · o/c/l/s open repo here · ") +
+			styHeading.Render("tab → panel") + styHint.Render(" · q quit")
 	default:
 		extra := ""
 		if m.view == model.ViewBranches {
 			extra = "n new · "
 		}
-		hint = styHint.Render("←→ view · ↑↓ move · o open · c claude · l lazygit · s serie · " + extra + "/ filter · tab repos · q quit")
+		hint = styHint.Render("←→ view · ↑↓ move · o open · c claude · l lazygit · s serie · "+extra+"/ filter · ") +
+			styHeading.Render("tab → repos") + styHint.Render(" · q quit")
 	}
-	return lipgloss.NewStyle().Width(w).MaxWidth(w).Render(hint)
+	// MaxWidth (not Width) so an over-long hint truncates to one line rather than
+	// wrapping; the most useful hints lead, the trailing ones drop first.
+	return renderer.NewStyle().MaxWidth(w).Render(hint)
 }
 
 func (m Model) renderSidebar(w, h int) string {
-	heading := "  REPOS"
-	if m.focus == focusSidebar {
-		heading = "▸ REPOS"
+	focused := m.focus == focusSidebar
+	var heading string
+	if focused {
+		heading = styHeading.Render("▸ REPOS")
+	} else {
+		heading = styMeta.Render("  REPOS")
 	}
-	rows := []string{styHeading.Render(heading)}
+	rows := []string{heading}
 	listH := h - 1
 	start := windowStart(m.sideCur, listH, len(m.repos))
 	for i := start; i < start+listH && i < len(m.repos); i++ {
-		name := padTrunc("  "+m.repos[i].Name, w)
-		if i == m.sideCur {
-			rows = append(rows, rowStyle(m.focus == focusSidebar).Render(name))
-		} else {
-			rows = append(rows, styText.Render(name))
+		marker := "  "
+		if i == m.scopedIdx {
+			marker = "● " // the repo the panel is currently scoped to
+		}
+		label := padTrunc(marker+m.repos[i].Name, w)
+		switch {
+		case focused && i == m.sideCur:
+			rows = append(rows, rowStyle(true).Render(label))
+		case i == m.scopedIdx:
+			rows = append(rows, styHeading.Render(label))
+		default:
+			rows = append(rows, styText.Render(label))
 		}
 	}
-	return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).Render(strings.Join(rows, "\n"))
+	return renderer.NewStyle().Width(w).Height(h).MaxWidth(w).Render(strings.Join(rows, "\n"))
 }
 
 func (m Model) renderPanel(w, h int) string {
-	heading := "  " + m.view.Label() + " — " + repoName(m.repos, m.scopedIdx)
+	// No repo name in the heading — the sidebar's ● marker already shows the scoped
+	// repo, so repeating it here was the redundant "repos line".
+	heading := "  " + m.view.Label()
 	if m.focus == focusMain {
-		heading = "▸ " + m.view.Label() + " — " + repoName(m.repos, m.scopedIdx)
+		heading = "▸ " + m.view.Label()
 	}
 
 	var body string
@@ -554,7 +582,7 @@ func (m Model) renderPanel(w, h int) string {
 		}
 	}
 	content := styHeading.Render(heading) + "\n" + body
-	return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).Render(content)
+	return renderer.NewStyle().Width(w).Height(h).MaxWidth(w).Render(content)
 }
 
 func renderList(rows []rowData, cursor, w, h int, focused bool) string {
@@ -569,13 +597,6 @@ func renderList(rows []rowData, cursor, w, h int, focused bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func repoName(repos []model.Repo, idx int) string {
-	if idx >= 0 && idx < len(repos) {
-		return repos[idx].Name
-	}
-	return ""
-}
-
 func emptyMsg(v model.View) string {
 	switch v {
 	case model.ViewPRs:
@@ -584,8 +605,6 @@ func emptyMsg(v model.View) string {
 		return "No local branches."
 	case model.ViewWorktrees:
 		return "No linked worktrees yet."
-	case model.ViewRepos:
-		return "No recent repos."
 	}
 	return ""
 }
@@ -688,21 +707,6 @@ func renderWorktreeRow(wt model.Worktree, w int, selected, focused bool) string 
 		return rowStyle(focused).Render("▸ " + nameCol + " " + branchCol + " " + headCol + " " + badgeCol)
 	}
 	return "  " + styText.Render(nameCol) + " " + styMeta.Render(branchCol) + " " + styMeta.Render(headCol) + " " + styMeta.Render(badgeCol)
-}
-
-func renderRepoRow(r model.Repo, w int, selected, focused bool) string {
-	avail := w - 2 - 1
-	if avail < 10 {
-		avail = 10
-	}
-	nameW := clamp(avail*40/100, 10, 40)
-	pathW := avail - nameW
-	nameCol := padTrunc(r.Name, nameW)
-	pathCol := padTrunc(r.Path, pathW)
-	if selected {
-		return rowStyle(focused).Render("▸ " + nameCol + " " + pathCol)
-	}
-	return "  " + styText.Render(nameCol) + " " + styMeta.Render(pathCol)
 }
 
 func relTime(unix int64) string {

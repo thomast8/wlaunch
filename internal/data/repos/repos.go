@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/thomast8/wlaunch/internal/data"
@@ -49,6 +50,36 @@ func readRecents(path string) []string {
 	return out
 }
 
+// reposDir is the root scanned for "all repos" (GIT_REPOS_DIR, else ~/GitRepos).
+func reposDir() string {
+	if d := os.Getenv("GIT_REPOS_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "GitRepos")
+}
+
+// scanRepos returns the git repos directly under dir, sorted by name, so the
+// sidebar can reach a repo that isn't in the recents history yet.
+func scanRepos(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if _, err := os.Stat(filepath.Join(p, ".git")); err == nil {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // List returns the scoped-repo candidates, default/most-recent first, deduped and
 // filtered to directories that still exist. repo-default.sh runs with the process
 // cwd so "current repo if in one" resolves correctly.
@@ -71,6 +102,11 @@ func List(ctx context.Context) ([]model.Repo, error) {
 		add(strings.TrimSpace(string(b)))
 	}
 	for _, p := range readRecents(recentsFile()) {
+		add(p)
+	}
+	// Then every repo under ~/GitRepos, so a repo you haven't visited recently is
+	// still selectable (recents stay on top; the rest fill in alphabetically).
+	for _, p := range scanRepos(reposDir()) {
 		add(p)
 	}
 	return repos, nil

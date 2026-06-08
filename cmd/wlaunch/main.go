@@ -41,12 +41,14 @@ func main() {
 	}
 	defer tty.Close()
 
-	p := tea.NewProgram(
-		ui.New(),
-		tea.WithOutput(os.Stderr),
-		tea.WithInput(tty),
-		tea.WithAltScreen(),
-	)
+	// Alt-screen by default (clean full-height dashboard). WLAUNCH_NO_ALTSCREEN=1
+	// renders inline instead — an A/B knob for diagnosing the Warp CLI-agent handoff
+	// after the TUI tears down (caw's fzf picker is inline and hands off cleanly).
+	opts := []tea.ProgramOption{tea.WithOutput(os.Stderr), tea.WithInput(tty)}
+	if os.Getenv("WLAUNCH_NO_ALTSCREEN") == "" {
+		opts = append(opts, tea.WithAltScreen())
+	}
+	p := tea.NewProgram(ui.New(), opts...)
 
 	final, err := p.Run()
 	if err != nil {

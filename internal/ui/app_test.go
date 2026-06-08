@@ -111,16 +111,28 @@ func TestSwitchToBranchesAndPick(t *testing.T) {
 	}
 }
 
-func TestSwitchToReposAndPickShell(t *testing.T) {
+func TestSidebarLaunchesRepoRoot(t *testing.T) {
 	m := loadedModel(t)
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyLeft}) // PRs -> Repos (wrap left)
-	if m.view != model.ViewRepos {
-		t.Fatalf("view = %v, want Repos", m.view)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab}) // focus the repo sidebar
+	if m.focus != focusSidebar {
+		t.Fatalf("focus = %v, want sidebar", m.focus)
 	}
-	m = step(t, m, key("o")) // default (claude) on the scoped/first repo
+	m = step(t, m, key("c")) // launch claude on the highlighted repo's root
 	sel := m.Selection()
-	if sel == nil || sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" {
-		t.Errorf("repo pick = %+v", sel)
+	if sel == nil || sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" || sel.Tool != "claude" {
+		t.Errorf("sidebar repo launch = %+v", sel)
+	}
+}
+
+func TestSidebarEnterScopesNotLaunch(t *testing.T) {
+	m := loadedModel(t)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab})   // focus sidebar
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // enter scopes, does NOT emit
+	if m.Selection() != nil {
+		t.Errorf("sidebar enter should scope, not launch; got %+v", m.Selection())
+	}
+	if m.focus != focusMain {
+		t.Errorf("scoping should return focus to the panel, got %v", m.focus)
 	}
 }
 

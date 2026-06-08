@@ -12,7 +12,6 @@ const (
 	ViewPRs View = iota
 	ViewBranches
 	ViewWorktrees
-	ViewRepos
 	viewCount
 )
 
@@ -25,8 +24,6 @@ func (v View) Label() string {
 		return "Branches"
 	case ViewWorktrees:
 		return "Worktrees"
-	case ViewRepos:
-		return "Repos"
 	default:
 		return "?"
 	}
