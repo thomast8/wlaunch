@@ -161,6 +161,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state[model.ViewBranches] = readyOrEmpty(len(m.branches))
 		return m, nil
 
+	case branchesRefreshedMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		if msg.branches != nil { // nil = re-list failed; keep the old list
+			m.branches = msg.branches
+			m.state[model.ViewBranches] = readyOrEmpty(len(m.branches))
+			if m.view == model.ViewBranches {
+				m.clampCursor()
+			}
+		}
+		m.status = msg.status
+		return m, nil
+
 	case worktreesLoadedMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -277,6 +291,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "D":
 		if m.focus == focusMain && m.view == model.ViewWorktrees {
 			return m.askRemoveAll()
+		}
+		return m, nil
+	case "f":
+		if m.focus == focusMain && m.view == model.ViewBranches {
+			m.status = "fetching…"
+			return m, fetchCmd(m.scopedPath(), m.gen)
+		}
+		return m, nil
+	case "p":
+		if m.focus == focusMain && m.view == model.ViewBranches {
+			if b := m.selectedBranch(); b != nil {
+				m.status = "pulling " + b.Name + "…"
+				return m, pullBranchCmd(m.scopedPath(), *b, m.gen)
+			}
 		}
 		return m, nil
 	case "/":
@@ -396,6 +424,27 @@ func (m Model) worktreeByPath(path string) *model.Worktree {
 	for i := range m.worktrees {
 		if m.worktrees[i].Path == path {
 			return &m.worktrees[i]
+		}
+	}
+	return nil
+}
+
+func (m Model) selectedBranch() *model.Branch {
+	if m.view != model.ViewBranches {
+		return nil
+	}
+	vis := m.visibleRows()
+	c := m.cursor[m.view]
+	if c < 0 || c >= len(vis) {
+		return nil
+	}
+	return m.branchByName(vis[c].ref)
+}
+
+func (m Model) branchByName(name string) *model.Branch {
+	for i := range m.branches {
+		if m.branches[i].Name == name {
+			return &m.branches[i]
 		}
 	}
 	return nil
@@ -668,7 +717,7 @@ func (m Model) renderFooter(w int) string {
 	default:
 		extra := ""
 		if m.view == model.ViewBranches {
-			extra = "n new · "
+			extra = "n new · f fetch · p pull · "
 		}
 		if m.view == model.ViewWorktrees {
 			extra = "d remove · D all · "

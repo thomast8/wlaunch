@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -133,5 +135,33 @@ func ListWorktrees(ctx context.Context, repo string) ([]model.Worktree, error) {
 // git refuses if the worktree has uncommitted changes; the branch and commits stay.
 func RemoveWorktree(ctx context.Context, repo, path string) error {
 	_, err := data.Run(ctx, repo, "git", "-C", repo, "worktree", "remove", path)
+	return err
+}
+
+// Fetch updates all remote-tracking refs and prunes deleted ones. It touches no
+// working tree or local branches, so it's always safe — it just refreshes the
+// ahead/behind the Branches view shows.
+func Fetch(ctx context.Context, repo string) error {
+	_, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", "--all", "--prune")
+	return err
+}
+
+// PullBranch fast-forwards a branch to its upstream. The checked-out branch takes a
+// normal `pull --ff-only`; any other branch is fast-forwarded via a fetch refspec,
+// which refuses a non-fast-forward — so a diverged or elsewhere-checked-out branch
+// errors out rather than losing or rewriting commits.
+func PullBranch(ctx context.Context, repo string, b model.Branch) error {
+	if b.Upstream == "" {
+		return errors.New("no upstream")
+	}
+	if b.IsCurrent {
+		_, err := data.Run(ctx, repo, "git", "-C", repo, "pull", "--ff-only")
+		return err
+	}
+	remote, ref, ok := strings.Cut(b.Upstream, "/")
+	if !ok || remote == "" || ref == "" {
+		return fmt.Errorf("unexpected upstream %q", b.Upstream)
+	}
+	_, err := data.Run(ctx, repo, "git", "-C", repo, "fetch", remote, ref+":"+b.Name)
 	return err
 }

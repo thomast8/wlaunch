@@ -45,6 +45,8 @@ The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
 | `o` / `enter` (panel) | open the selection (default tool) |
 | `c` / `l` / `s` (panel) | open the selection in claude / lazygit / serie |
 | `n` (branches) | create a new branch worktree |
+| `f` (branches) | fetch (`--all --prune`) — refresh remote-tracking refs + ahead/behind |
+| `p` (branches) | pull / fast-forward the selected branch to its upstream (ff-only, safe) |
 | `d` (worktrees) | remove the selected worktree (y/n confirm; branch kept, dirty skipped) |
 | `D` (worktrees) | remove all worktrees here (respects the filter; main + dirty skipped) |
 | `/` | filter the current view |

@@ -112,6 +112,47 @@ func removeWorktreesCmd(repo string, paths []string, gen uint64) tea.Cmd {
 	}
 }
 
+// branchesRefreshedMsg carries the post-fetch/pull branch list (nil = couldn't
+// re-list, keep the old one) plus a status line. No loading state, so the list
+// stays visible during the op and swaps when done — no spinner flicker.
+type branchesRefreshedMsg struct {
+	gen      uint64
+	branches []model.Branch
+	status   string
+}
+
+func fetchCmd(repo string, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		status := "✓ fetched"
+		if err := git.Fetch(ctx, repo); err != nil {
+			status = "fetch failed: " + friendly(err)
+		}
+		br, err := git.ListBranches(ctx, repo)
+		if err != nil {
+			br = nil
+		}
+		return branchesRefreshedMsg{gen: gen, branches: br, status: status}
+	}
+}
+
+func pullBranchCmd(repo string, b model.Branch, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		status := "✓ " + b.Name + " up to date"
+		if err := git.PullBranch(ctx, repo, b); err != nil {
+			status = b.Name + ": " + friendly(err)
+		}
+		br, err := git.ListBranches(ctx, repo)
+		if err != nil {
+			br = nil
+		}
+		return branchesRefreshedMsg{gen: gen, branches: br, status: status}
+	}
+}
+
 // friendly maps a raw subprocess error to a short, human line for an error state.
 func friendly(err error) string {
 	s := err.Error()
@@ -126,6 +167,12 @@ func friendly(err error) string {
 		return "no GitHub remote configured."
 	case strings.Contains(s, "not a git repository"):
 		return "not a git repository."
+	case strings.Contains(s, "no upstream"):
+		return "no upstream"
+	case strings.Contains(s, "is already checked out"), strings.Contains(s, "checked out at"):
+		return "checked out elsewhere"
+	case strings.Contains(s, "non-fast-forward"), strings.Contains(s, "rejected"), strings.Contains(s, "Not possible to fast-forward"), strings.Contains(s, "diverging"):
+		return "diverged — can't fast-forward"
 	default:
 		if len(s) > 90 {
 			s = s[:90] + "…"
