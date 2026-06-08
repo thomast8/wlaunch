@@ -1,0 +1,8 @@
+# Compiled binary — built to ~/.warp/bin/wlaunch at setup time, never committed.
+/wlaunch
+/dist/
+
+# Go test / coverage output
+*.test
+*.out
+coverage.*
