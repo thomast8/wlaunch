@@ -47,8 +47,8 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 | `←` / `→` | switch view (PRs · Branches · Worktrees) |
 | `tab` | toggle focus between the repo sidebar and the panel |
 | `enter` (sidebar) | scope the panel to that repo |
-| `enter` (panel) | open the selection with the default tool |
-| `;` then `o` `c` `l` `s` | open the selection (or sidebar repo) in default / claude / lazygit / serie |
+| `enter` (panel) | launch the selection in claude (the default action) |
+| `;` then `c` `l` `s` `o` | open the selection (or sidebar repo) in claude / lazygit / serie / a plain shell |
 | `;` then `n` (branches) | create a new branch worktree |
 | `;` then `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
 | `;` then `p` (branches) | pull / fast-forward the selected branch (ff-only, safe; in-place for checked-out branches) |

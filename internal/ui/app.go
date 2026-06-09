@@ -416,7 +416,7 @@ func (m Model) handleLeader(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		return m.launch(model.TargetSerie)
 	case "o":
-		return m.launch(model.TargetDefault)
+		return m.launch(model.TargetShell) // "open" = a plain terminal in the worktree
 	case "n":
 		if m.focus == focusMain && m.view == model.ViewBranches {
 			m.inMode = inputNewBranch
@@ -1021,7 +1021,7 @@ func (m Model) renderFooter(w int) string {
 		hint = styErr.Render(verb+" with "+what+" — DISCARD them?  ") +
 			styHeading.Render("y") + styHint.Render(" discard · ") + styHeading.Render("n") + styHint.Render(" keep")
 	case m.awaiting: // leader pressed: show the tool/action menu it unlocks
-		menu := "c claude · l lazygit · s serie · o open"
+		menu := "c claude · l lazygit · s serie · o shell"
 		if m.focus == focusMain && m.view == model.ViewBranches {
 			menu += " · n new · f fetch · p pull · d del · D clean"
 		} else if m.focus == focusMain && m.view == model.ViewWorktrees {

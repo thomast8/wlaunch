@@ -80,6 +80,18 @@ func TestPickPREmitsContract(t *testing.T) {
 	}
 }
 
+// ';o' = "open" must be a plain shell, distinct from ';c' (claude).
+func TestLeaderOpenIsShellNotClaude(t *testing.T) {
+	m := loadedModel(t)
+	m = leader(t, m, "o")
+	if m.Selection() == nil {
+		t.Fatal("expected a selection after ; o")
+	}
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\n" {
+		t.Errorf("Encode() = %q, want a shell launch", got)
+	}
+}
+
 func TestPickPRSecondRowLazygit(t *testing.T) {
 	m := loadedModel(t)
 	m = step(t, m, down)  // move to PR #232
