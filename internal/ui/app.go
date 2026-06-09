@@ -53,6 +53,7 @@ const (
 	confirmForceDeleteBranch // force a single delete after -d refused it
 	confirmCleanBranches     // batch: force gone + safe no-upstream
 	confirmRemoveWtAndBranch // branch is checked out: remove its worktree, then delete it
+	confirmForceRemoveWt     // dirty worktree skipped: force-remove (discards changes)?
 )
 
 const viewN = 3 // PRs, Branches, Worktrees (repos live in the sidebar, not a view)
@@ -99,6 +100,7 @@ type Model struct {
 	delBranch        string              // branch queued for single delete / force escalation
 	cleanTargets     []branchCleanTarget // branches queued for batch cleanup
 	autoDeleteBranch string              // after a worktree removal, delete this branch w/o re-asking
+	dirtyFiles       int                 // uncommitted-file count for a pending force-remove prompt
 	status           string              // transient result line (e.g. "removed 3 · 1 skipped")
 
 	selection *model.Selection
@@ -221,6 +223,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.status = removalStatus(len(msg.removed), msg.failed)
+		// Some worktrees were refused as dirty/locked: offer to force-remove them
+		// (keeps any carried autoDeleteBranch so the branch delete still follows).
+		if len(msg.dirty) > 0 {
+			m.confirmPaths = msg.dirty
+			m.dirtyFiles = msg.dirtyFiles
+			m.confirm = confirmForceRemoveWt
+			return m, nil
+		}
 		return m.afterWorktreeRemoval(freedNames)
 
 	case branchDeletedMsg:
@@ -302,7 +312,7 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 	m.cursor = [viewN]int{}
 	m.confirm, m.confirmPaths, m.status = confirmNone, nil, "" // drop any pending remove
 	m.delBranch, m.cleanTargets = "", nil                      // drop any pending branch delete
-	m.autoDeleteBranch = ""                                    // drop any carried delete intent
+	m.autoDeleteBranch, m.dirtyFiles = "", 0                   // drop any carried delete intent
 	m.state[model.ViewPRs] = stateLoading
 	m.state[model.ViewBranches] = stateLoading
 	m.state[model.ViewWorktrees] = stateLoading
@@ -424,6 +434,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // key cancels and clears all pending state.
 func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if s := msg.String(); s != "y" && s != "Y" {
+		m.autoDeleteBranch = "" // a cancel also drops any carried branch-delete intent
 		m.clearConfirm()
 		return m, nil
 	}
@@ -436,7 +447,7 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = "removing…"
-		return m, removeWorktreesCmd(m.scopedPath(), paths, m.gen)
+		return m, removeWorktreesCmd(m.scopedPath(), paths, false, m.gen)
 	case confirmDeleteBranch, confirmForceDeleteBranch:
 		name := m.delBranch
 		force := mode == confirmForceDeleteBranch
@@ -468,18 +479,29 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Remove the worktree; afterWorktreeRemoval then auto-deletes the branch.
 		m.autoDeleteBranch = branch
 		m.status = "removing worktree…"
-		return m, removeWorktreesCmd(m.scopedPath(), paths, m.gen)
+		return m, removeWorktreesCmd(m.scopedPath(), paths, false, m.gen)
+	case confirmForceRemoveWt:
+		paths := m.confirmPaths
+		m.clearConfirm() // keeps autoDeleteBranch so a carried branch delete still follows
+		if len(paths) == 0 {
+			return m, nil
+		}
+		m.status = "force-removing…"
+		return m, removeWorktreesCmd(m.scopedPath(), paths, true, m.gen)
 	}
 	m.clearConfirm()
 	return m, nil
 }
 
-// clearConfirm drops the pending destructive action and its queued targets.
+// clearConfirm drops the pending destructive action and its queued targets. It does
+// NOT touch autoDeleteBranch — that intent must survive the clearConfirm() that
+// precedes kicking a worktree removal.
 func (m *Model) clearConfirm() {
 	m.confirm = confirmNone
 	m.confirmPaths = nil
 	m.delBranch = ""
 	m.cleanTargets = nil
+	m.dirtyFiles = 0
 }
 
 // askDeleteBranch queues the selected branch for a safe delete (the current branch
@@ -974,6 +996,17 @@ func (m Model) renderFooter(w int) string {
 	case m.confirm == confirmRemoveWtAndBranch:
 		hint = styErr.Render(m.delBranch+" is in a worktree — remove the worktree and delete the branch?  ") +
 			styHeading.Render("y") + styHint.Render(" yes · ") + styHeading.Render("n") + styHint.Render(" cancel")
+	case m.confirm == confirmForceRemoveWt:
+		what := "uncommitted changes"
+		if m.dirtyFiles > 0 {
+			what = fmt.Sprintf("%d uncommitted file(s)", m.dirtyFiles)
+		}
+		verb := "Force-remove worktree"
+		if len(m.confirmPaths) > 1 {
+			verb = fmt.Sprintf("Force-remove %d worktrees", len(m.confirmPaths))
+		}
+		hint = styErr.Render(verb+" with "+what+" — DISCARD them?  ") +
+			styHeading.Render("y") + styHint.Render(" discard · ") + styHeading.Render("n") + styHint.Render(" keep")
 	case m.status != "":
 		hint = styHeading.Render(m.status)
 	case m.inMode == inputFilter:

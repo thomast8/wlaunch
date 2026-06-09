@@ -87,28 +87,37 @@ func loadWorktreesCmd(repo string, gen uint64) tea.Cmd {
 }
 
 type worktreesRemovedMsg struct {
-	gen     uint64
-	removed []string // paths git actually removed (so the model can splice them out)
-	failed  int
+	gen        uint64
+	removed    []string // paths git actually removed (so the model can splice them out)
+	dirty      []string // skipped because dirty — force-removable (model offers force)
+	dirtyFiles int      // total uncommitted files across `dirty` (for the discard warning)
+	failed     int      // hard failures (not recoverable with --force)
 }
 
-// removeWorktreesCmd removes each path (one for single-remove, many for remove-all)
-// and returns the paths that succeeded; git.RemoveWorktree refuses dirty ones, so
-// those land in failed. The caller splices `removed` out of its list (no re-read).
-func removeWorktreesCmd(repo string, paths []string, gen uint64) tea.Cmd {
+// removeWorktreesCmd removes each path (one for single-remove, many for remove-all).
+// With force=false, git.RemoveWorktree refuses a dirty worktree; those land in `dirty`
+// (force-removable) so the model can offer a force escalation, while hard failures
+// (incl. locked worktrees) land in `failed`. force=true discards uncommitted files.
+// The caller splices `removed` out.
+func removeWorktreesCmd(repo string, paths []string, force bool, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		var removed []string
-		var failed int
+		var removed, dirty []string
+		var dirtyFiles, failed int
 		for _, p := range paths {
-			if err := git.RemoveWorktree(ctx, repo, p); err != nil {
-				failed++
-			} else {
+			err := git.RemoveWorktree(ctx, repo, p, force)
+			switch {
+			case err == nil:
 				removed = append(removed, p)
+			case !force && git.IsForceRemovable(err):
+				dirty = append(dirty, p)
+				dirtyFiles += git.DirtyFileCount(ctx, p)
+			default:
+				failed++
 			}
 		}
-		return worktreesRemovedMsg{gen: gen, removed: removed, failed: failed}
+		return worktreesRemovedMsg{gen: gen, removed: removed, dirty: dirty, dirtyFiles: dirtyFiles, failed: failed}
 	}
 }
 

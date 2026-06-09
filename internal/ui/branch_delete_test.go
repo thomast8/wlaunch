@@ -271,6 +271,76 @@ func TestCleanBranchesSplicesRemoved(t *testing.T) {
 	}
 }
 
+// A dirty worktree skipped during removal must offer a force-remove escalation
+// rather than silently dead-ending.
+func TestDirtyWorktreeOffersForceRemove(t *testing.T) {
+	m := cleanupModel(t)
+	nm, cmd := m.Update(worktreesRemovedMsg{
+		gen: m.gen, removed: nil, dirty: []string{"/wt/pr289"}, dirtyFiles: 7, failed: 0,
+	})
+	m = nm.(Model)
+	if cmd != nil {
+		t.Error("offering force-remove should not issue a command yet")
+	}
+	if m.confirm != confirmForceRemoveWt {
+		t.Fatalf("confirm = %v, want confirmForceRemoveWt", m.confirm)
+	}
+	if len(m.confirmPaths) != 1 || m.confirmPaths[0] != "/wt/pr289" || m.dirtyFiles != 7 {
+		t.Errorf("force-remove not queued correctly: %v / %d", m.confirmPaths, m.dirtyFiles)
+	}
+}
+
+func TestForceRemoveYesDiscards(t *testing.T) {
+	m := cleanupModel(t)
+	m.confirm = confirmForceRemoveWt
+	m.confirmPaths = []string{"/wt/pr289"}
+	m.dirtyFiles = 7
+	nm, cmd := m.Update(key("y"))
+	m = nm.(Model)
+	if cmd == nil {
+		t.Error("y should kick the force removal")
+	}
+	if m.status != "force-removing…" {
+		t.Errorf("status = %q, want 'force-removing…'", m.status)
+	}
+}
+
+// The force-remove escalation must preserve a carried branch-delete intent, so the
+// combined "remove worktree and delete branch" flow completes after a dirty skip.
+func TestForceRemovePreservesAutoDeleteIntent(t *testing.T) {
+	m := cleanupModel(t)
+	m.autoDeleteBranch = "fix/x"
+	// a dirty skip arrives mid-combined-flow -> offer force-remove
+	nm, _ := m.Update(worktreesRemovedMsg{gen: m.gen, dirty: []string{"/wt/pr289"}, dirtyFiles: 3})
+	m = nm.(Model)
+	if m.confirm != confirmForceRemoveWt || m.autoDeleteBranch != "fix/x" {
+		t.Fatalf("intent not preserved: confirm=%v auto=%q", m.confirm, m.autoDeleteBranch)
+	}
+	// confirming force-remove must keep the intent alive for the follow-up
+	nm, cmd := m.Update(key("y"))
+	m = nm.(Model)
+	if cmd == nil || m.autoDeleteBranch != "fix/x" {
+		t.Errorf("force-remove should keep autoDeleteBranch and issue a command, got auto=%q cmd=%v", m.autoDeleteBranch, cmd != nil)
+	}
+}
+
+// Cancelling a force-remove confirm must drop the carried branch-delete intent, so a
+// later unrelated worktree removal can't silently consume a stale autoDeleteBranch.
+func TestCancelForceRemoveDropsAutoDeleteIntent(t *testing.T) {
+	m := cleanupModel(t)
+	m.autoDeleteBranch = "fix/x"
+	m.confirm = confirmForceRemoveWt
+	m.confirmPaths = []string{"/wt/pr289"}
+	m.dirtyFiles = 3
+	m = step(t, m, key("n")) // keep the files
+	if m.confirm != confirmNone {
+		t.Errorf("n should clear the confirm, got %v", m.confirm)
+	}
+	if m.autoDeleteBranch != "" {
+		t.Errorf("cancel must drop the carried intent, got %q", m.autoDeleteBranch)
+	}
+}
+
 func TestBranchDeleteKeysIgnoredOutsidePanel(t *testing.T) {
 	m := loadedModel(t) // PRs view
 	m = step(t, m, key("d"))

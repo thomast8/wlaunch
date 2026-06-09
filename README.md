@@ -49,8 +49,8 @@ The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
 | `p` (branches) | pull / fast-forward the selected branch to its upstream (ff-only, safe; in-place for checked-out branches) |
 | `d` (branches) | delete the selected branch (y/n; safe `-d`, escalates to a force confirm if unmerged). If it's checked out in a worktree, offers to remove that worktree first, then delete |
 | `D` (branches) | clean (respects the filter): force-delete `gone` branches + safe-delete no-upstream ones (git skips any with unmerged commits; current + checked-out excluded) |
-| `d` (worktrees) | remove the selected worktree (y/n; branch kept, dirty skipped), then offers to delete the now-freed branch |
-| `D` (worktrees) | remove all worktrees here (respects the filter; main + dirty skipped), then offers to delete their freed branches |
+| `d` (worktrees) | remove the selected worktree (y/n; branch kept). A dirty worktree is skipped but then offers a force-remove confirm that names how many uncommitted files it would discard. On success, offers to delete the now-freed branch |
+| `D` (worktrees) | remove all worktrees here (respects the filter; main skipped). Dirty ones are collected into a single force-remove confirm; then offers to delete the freed branches |
 | `/` | filter the current view |
 | `q` / `esc` | cancel |
 

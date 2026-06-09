@@ -131,11 +131,42 @@ func ListWorktrees(ctx context.Context, repo string) ([]model.Worktree, error) {
 	return parseWorktrees(b), nil
 }
 
-// RemoveWorktree removes a worktree (its working dir + admin link). No --force, so
-// git refuses if the worktree has uncommitted changes; the branch and commits stay.
-func RemoveWorktree(ctx context.Context, repo, path string) error {
-	_, err := data.Run(ctx, repo, "git", "-C", repo, "worktree", "remove", path)
+// RemoveWorktree removes a worktree (its working dir + admin link). With force=false
+// git refuses a worktree that has uncommitted/untracked files (the branch and commits
+// always stay); force=true (`--force`) overrides that, DISCARDING those files. A
+// *locked* worktree needs `-f -f` and is not handled here — it surfaces as an error.
+func RemoveWorktree(ctx context.Context, repo, path string, force bool) error {
+	args := []string{"-C", repo, "worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, path)
+	_, err := data.Run(ctx, repo, "git", args...)
 	return err
+}
+
+// IsForceRemovable reports whether a failed (non-force) worktree removal would succeed
+// with a single --force — i.e. it was refused for a dirty working tree. git prints
+// "use --force to delete it" in that case. A locked worktree prints "use 'remove
+// -f -f'" instead, so it is correctly NOT treated as force-removable here.
+func IsForceRemovable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "use --force")
+}
+
+// DirtyFileCount counts the modified/untracked entries in a worktree (the files a
+// force-remove would discard). Returns 0 on any error — it's only used for a warning.
+func DirtyFileCount(ctx context.Context, path string) int {
+	out, err := data.Run(ctx, path, "git", "-C", path, "status", "--porcelain")
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // DeleteBranch removes a local branch. force=false uses `-d` (git refuses a branch
