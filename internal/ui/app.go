@@ -375,9 +375,10 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m.emit(model.TargetDefault)
-	case tea.KeyCtrlJ:
-		// Ctrl+J is the reliable "second Enter" (Shift+Enter is indistinguishable from
-		// Enter at the terminal/bubbletea-v1 layer): open the selection in a plain shell.
+	case tea.KeyCtrlO:
+		// Ctrl+O = "open" in a plain shell. (Enter-modifiers like Shift/Ctrl+Enter are
+		// indistinguishable from plain Enter at the terminal layer, so a Ctrl-chord is
+		// the only reliable second launch key; 'o' keeps the mnemonic from `;o`.)
 		m.status = ""
 		return m.launch(model.TargetShell)
 	case tea.KeyEsc:
@@ -1042,9 +1043,9 @@ func (m Model) renderFooter(w int) string {
 		if m.filterStr != "" {
 			clear = "esc clear · "
 		}
-		nav := "type to filter · ↑↓ move · ←→ view · enter claude · ^J shell · "
+		nav := "type to filter · ↑↓ move · ←→ view · enter claude · ^O shell · "
 		if m.focus == focusSidebar {
-			nav = "type to filter · ↑↓ repo · enter scope · ^J shell · "
+			nav = "type to filter · ↑↓ repo · enter scope · ^O shell · "
 		}
 		hint = styHint.Render(clear+nav) +
 			styHeading.Render("; tools/actions") + styHint.Render(" · tab focus · ^C quit")

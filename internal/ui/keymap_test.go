@@ -68,17 +68,16 @@ func TestOnlyCtrlCQuits(t *testing.T) {
 	}
 }
 
-// Ctrl+J is the reliable "second Enter": it opens the selection in a shell, while
-// plain Enter stays claude (Shift+Enter is indistinguishable from Enter, so we can't
-// use it).
-func TestCtrlJOpensShell(t *testing.T) {
+// Ctrl+O opens the selection in a shell, while plain Enter stays claude
+// (Enter-modifiers are indistinguishable from Enter, so a Ctrl-chord is required).
+func TestCtrlOOpensShell(t *testing.T) {
 	m := loadedModel(t) // PRs view, first row = PR #289
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
 	if m.Selection() == nil {
-		t.Fatal("Ctrl+J should launch the selection")
+		t.Fatal("Ctrl+O should launch the selection")
 	}
 	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\n" {
-		t.Errorf("Ctrl+J Encode() = %q, want a shell launch", got)
+		t.Errorf("Ctrl+O Encode() = %q, want a shell launch", got)
 	}
 }
 

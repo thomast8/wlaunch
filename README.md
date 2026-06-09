@@ -48,7 +48,7 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 | `tab` | toggle focus between the repo sidebar and the panel |
 | `enter` (sidebar) | scope the panel to that repo |
 | `enter` (panel) | launch the selection in claude (the default action) |
-| `Ctrl+J` (panel) | open the selection in a plain shell (Shift+Enter can't be detected by terminals; Ctrl+J is the reliable "second Enter") |
+| `Ctrl+O` (panel) | open the selection in a plain shell (Enter-modifiers like Shift/Ctrl+Enter can't be detected by terminals, so a Ctrl-chord is used; `o` = open) |
 | `;` then `c` `l` `s` `o` | open the selection (or sidebar repo) in claude / lazygit / serie / a plain shell |
 | `;` then `n` (branches) | create a new branch worktree |
 | `;` then `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
