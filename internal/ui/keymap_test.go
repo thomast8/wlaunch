@@ -68,6 +68,20 @@ func TestOnlyCtrlCQuits(t *testing.T) {
 	}
 }
 
+// Ctrl+J is the reliable "second Enter": it opens the selection in a shell, while
+// plain Enter stays claude (Shift+Enter is indistinguishable from Enter, so we can't
+// use it).
+func TestCtrlJOpensShell(t *testing.T) {
+	m := loadedModel(t) // PRs view, first row = PR #289
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if m.Selection() == nil {
+		t.Fatal("Ctrl+J should launch the selection")
+	}
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\n" {
+		t.Errorf("Ctrl+J Encode() = %q, want a shell launch", got)
+	}
+}
+
 // Backspace edits the live filter.
 func TestBackspaceEditsFilter(t *testing.T) {
 	m := loadedModel(t)

@@ -368,13 +368,18 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.status = ""
 		// In the sidebar, enter SCOPES the panel to the repo; in the panel it launches
-		// the selection with the default tool.
+		// the selection with the default tool (claude).
 		if m.focus == focusSidebar {
 			cmd := m.scopeReload(m.sideCur)
 			m.focus = focusMain
 			return m, cmd
 		}
 		return m.emit(model.TargetDefault)
+	case tea.KeyCtrlJ:
+		// Ctrl+J is the reliable "second Enter" (Shift+Enter is indistinguishable from
+		// Enter at the terminal/bubbletea-v1 layer): open the selection in a plain shell.
+		m.status = ""
+		return m.launch(model.TargetShell)
 	case tea.KeyEsc:
 		if m.filterStr != "" {
 			m.filterStr = ""
@@ -1037,9 +1042,9 @@ func (m Model) renderFooter(w int) string {
 		if m.filterStr != "" {
 			clear = "esc clear · "
 		}
-		nav := "type to filter · ↑↓ move · ←→ view · enter open · "
+		nav := "type to filter · ↑↓ move · ←→ view · enter claude · ^J shell · "
 		if m.focus == focusSidebar {
-			nav = "type to filter · ↑↓ repo · enter scope · "
+			nav = "type to filter · ↑↓ repo · enter scope · ^J shell · "
 		}
 		hint = styHint.Render(clear+nav) +
 			styHeading.Render("; tools/actions") + styHint.Render(" · tab focus · ^C quit")
