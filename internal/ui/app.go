@@ -1057,13 +1057,14 @@ func (m Model) renderFooter(w int) string {
 
 func (m Model) renderSidebar(w, h int) string {
 	focused := m.focus == focusSidebar
-	var heading string
+	// Heading mirrors renderPanel: always the accent heading style, only the
+	// ▸/space marker tracks focus — so "REPOS" matches the panel's "▸ PRs" instead
+	// of dimming to grey when the panel has focus.
+	heading := "  REPOS"
 	if focused {
-		heading = styHeading.Render("▸ REPOS")
-	} else {
-		heading = styMeta.Render("  REPOS")
+		heading = "▸ REPOS"
 	}
-	rows := []string{heading}
+	rows := []string{styHeading.Render(heading)}
 	listH := h - 1
 	start := windowStart(m.sideCur, listH, len(m.repos))
 	for i := start; i < start+listH && i < len(m.repos); i++ {
