@@ -30,7 +30,7 @@ func cleanupModel(t *testing.T) Model {
 
 func TestDeleteCurrentBranchBlocked(t *testing.T) {
 	m := cleanupModel(t) // cursor 0 = main (IsCurrent)
-	m = step(t, m, key("d"))
+	m = leader(t, m, "d")
 	if m.confirm != confirmNone {
 		t.Errorf("the current branch must not enter a delete confirm")
 	}
@@ -44,12 +44,12 @@ func TestDeleteCurrentBranchBlocked(t *testing.T) {
 func TestDeleteCheckedOutBranchOffersWorktreeRemoval(t *testing.T) {
 	m := cleanupModel(t)
 	for i := 0; i < 4; i++ { // move to fix/x (index 4), checked out in /wt/pr289
-		m = step(t, m, key("j"))
+		m = step(t, m, down)
 	}
 	if b := m.selectedBranch(); b == nil || b.Name != "fix/x" {
 		t.Fatalf("cursor not on fix/x: %+v", b)
 	}
-	m = step(t, m, key("d"))
+	m = leader(t, m, "d")
 	if m.confirm != confirmRemoveWtAndBranch {
 		t.Fatalf("confirm = %v, want confirmRemoveWtAndBranch", m.confirm)
 	}
@@ -61,9 +61,9 @@ func TestDeleteCheckedOutBranchOffersWorktreeRemoval(t *testing.T) {
 func TestRemoveWtAndBranchYesRemovesWorktreeFirst(t *testing.T) {
 	m := cleanupModel(t)
 	for i := 0; i < 4; i++ {
-		m = step(t, m, key("j"))
+		m = step(t, m, down)
 	}
-	m = step(t, m, key("d")) // confirmRemoveWtAndBranch
+	m = leader(t, m, "d") // confirmRemoveWtAndBranch
 	nm, cmd := m.Update(key("y"))
 	m = nm.(Model)
 	if cmd == nil {
@@ -109,9 +109,9 @@ func TestWorktreeRemovalOffersBranchDelete(t *testing.T) {
 
 func TestDeleteBranchConfirmThenCancel(t *testing.T) {
 	m := cleanupModel(t)
-	m = step(t, m, key("j")) // live
-	m = step(t, m, key("j")) // old-pr
-	m = step(t, m, key("d"))
+	m = step(t, m, down) // live
+	m = step(t, m, down) // old-pr
+	m = leader(t, m, "d")
 	if m.confirm != confirmDeleteBranch || m.delBranch != "old-pr" {
 		t.Fatalf("confirm = %v, delBranch = %q", m.confirm, m.delBranch)
 	}
@@ -123,9 +123,9 @@ func TestDeleteBranchConfirmThenCancel(t *testing.T) {
 
 func TestDeleteBranchYesKicksSafeDelete(t *testing.T) {
 	m := cleanupModel(t)
-	m = step(t, m, key("j"))
-	m = step(t, m, key("j")) // old-pr
-	m = step(t, m, key("d"))
+	m = step(t, m, down)
+	m = step(t, m, down) // old-pr
+	m = leader(t, m, "d")
 	nm, cmd := m.Update(key("y"))
 	m = nm.(Model)
 	if m.confirm != confirmNone {
@@ -206,7 +206,7 @@ func TestBranchDeleteSplicesInMemory(t *testing.T) {
 // the current branch, live-tracked branches, and worktree-checked-out branches.
 func TestCleanTargetsClassification(t *testing.T) {
 	m := cleanupModel(t)
-	m = step(t, m, key("D"))
+	m = leader(t, m, "D")
 	if m.confirm != confirmCleanBranches {
 		t.Fatalf("confirm = %v, want confirmCleanBranches", m.confirm)
 	}
@@ -228,12 +228,8 @@ func TestCleanTargetsClassification(t *testing.T) {
 // With a filter active, D cleans only the visible subset (matches worktree D).
 func TestCleanRespectsFilter(t *testing.T) {
 	m := cleanupModel(t)
-	m = step(t, m, key("/")) // enter filter
-	for _, r := range "old" {
-		m = step(t, m, key(string(r)))
-	}
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // apply filter, exit input
-	m = step(t, m, key("D"))
+	m = typeStr(t, m, "old") // live type-to-filter, no '/' or enter needed
+	m = leader(t, m, "D")
 	if m.confirm != confirmCleanBranches {
 		t.Fatalf("confirm = %v, want confirmCleanBranches", m.confirm)
 	}
@@ -244,7 +240,7 @@ func TestCleanRespectsFilter(t *testing.T) {
 
 func TestCleanBranchesYesKicksCleanup(t *testing.T) {
 	m := cleanupModel(t)
-	m = step(t, m, key("D"))
+	m = leader(t, m, "D")
 	nm, cmd := m.Update(key("y"))
 	m = nm.(Model)
 	if cmd == nil {
@@ -341,10 +337,36 @@ func TestCancelForceRemoveDropsAutoDeleteIntent(t *testing.T) {
 	}
 }
 
+// An async message that raises a confirm while the leader is armed must not strand
+// `awaiting` — otherwise the keystroke after the confirm resolves gets eaten.
+func TestLeaderDisarmedByAsyncConfirm(t *testing.T) {
+	m := cleanupModel(t)
+	m = step(t, m, key(";")) // arm the leader
+	if !m.awaiting {
+		t.Fatal("';' should arm the leader")
+	}
+	// an in-flight delete result raises a force-delete confirm underneath it
+	m = step(t, m, branchDeletedMsg{
+		gen: m.gen, name: "old-pr", forced: false,
+		err: errors.New("error: the branch 'old-pr' is not fully merged."),
+	})
+	if m.confirm != confirmForceDeleteBranch {
+		t.Fatalf("expected the force-delete confirm, got %v", m.confirm)
+	}
+	m = step(t, m, key("n")) // cancel the confirm
+	if m.awaiting {
+		t.Error("cancelling the confirm must disarm the stranded leader")
+	}
+	m = step(t, m, key("z")) // next key must filter, not be swallowed
+	if m.filterStr != "z" {
+		t.Errorf("next key should filter, got filterStr=%q awaiting=%v", m.filterStr, m.awaiting)
+	}
+}
+
 func TestBranchDeleteKeysIgnoredOutsidePanel(t *testing.T) {
 	m := loadedModel(t) // PRs view
-	m = step(t, m, key("d"))
-	m = step(t, m, key("D"))
+	m = leader(t, m, "d")
+	m = leader(t, m, "D")
 	if m.confirm != confirmNone {
 		t.Errorf("d/D in the PRs view should not start a branch delete")
 	}

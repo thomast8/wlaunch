@@ -38,7 +38,6 @@ type inputMode int
 
 const (
 	inputNone inputMode = iota
-	inputFilter
 	inputNewBranch
 )
 
@@ -92,7 +91,8 @@ type Model struct {
 	spinner spinner.Model
 
 	inMode    inputMode
-	filter    textinput.Model
+	filterStr string // live type-to-filter query (always on; no mode to enter)
+	awaiting  bool   // true after ';' — next key is a tool/action from the leader menu
 	nameInput textinput.Model
 
 	confirm          confirmMode         // pending y/n for a destructive action
@@ -112,10 +112,6 @@ func New() Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
-	fi := textinput.New()
-	fi.Prompt = ""
-	fi.Placeholder = "filter…"
-
 	ni := textinput.New()
 	ni.Prompt = ""
 	ni.Placeholder = "new-branch-name"
@@ -124,7 +120,6 @@ func New() Model {
 		focus:     focusMain,
 		view:      model.ViewPRs,
 		spinner:   sp,
-		filter:    fi,
 		nameInput: ni,
 	}
 }
@@ -313,6 +308,7 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 	m.confirm, m.confirmPaths, m.status = confirmNone, nil, "" // drop any pending remove
 	m.delBranch, m.cleanTargets = "", nil                      // drop any pending branch delete
 	m.autoDeleteBranch, m.dirtyFiles = "", 0                   // drop any carried delete intent
+	m.awaiting = false                                         // drop a dangling leader
 	m.state[model.ViewPRs] = stateLoading
 	m.state[model.ViewBranches] = stateLoading
 	m.state[model.ViewWorktrees] = stateLoading
@@ -326,22 +322,121 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "ctrl+c" {
+	if msg.String() == "ctrl+c" { // the one true quit; esc never kills the TUI
 		m.quit = true
 		return m, tea.Quit
 	}
 	if m.confirm != confirmNone {
 		return m.handleConfirmKey(msg)
 	}
-	if m.inMode != inputNone {
+	if m.inMode == inputNewBranch {
 		return m.handleInputKey(msg)
 	}
-	m.status = "" // any normal key clears the transient result line
+	if m.awaiting { // previous key was ';' — resolve the leader menu
+		m.awaiting = false
+		return m.handleLeader(msg)
+	}
+	return m.handleMainKey(msg)
+}
 
+// handleMainKey is the default state: printable keys filter live (no '/' needed),
+// arrows/Tab navigate, Enter launches/scopes, ';' opens the tool+action leader, and
+// esc clears the filter rather than quitting (Ctrl+C is the only quit).
+func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyTab:
+		if m.focus == focusSidebar {
+			m.focus = focusMain
+		} else {
+			m.focus = focusSidebar
+		}
+		return m, nil
+	case tea.KeyLeft:
+		m.view = m.view.Prev()
+		m.clampCursor()
+		return m, nil
+	case tea.KeyRight:
+		m.view = m.view.Next()
+		m.clampCursor()
+		return m, nil
+	case tea.KeyUp:
+		m.move(-1)
+		return m, nil
+	case tea.KeyDown:
+		m.move(1)
+		return m, nil
+	case tea.KeyEnter:
+		m.status = ""
+		// In the sidebar, enter SCOPES the panel to the repo; in the panel it launches
+		// the selection with the default tool.
+		if m.focus == focusSidebar {
+			cmd := m.scopeReload(m.sideCur)
+			m.focus = focusMain
+			return m, cmd
+		}
+		return m.emit(model.TargetDefault)
+	case tea.KeyEsc:
+		if m.filterStr != "" {
+			m.filterStr = ""
+			m.clampCursor()
+		}
+		return m, nil
+	case tea.KeyBackspace:
+		if r := []rune(m.filterStr); len(r) > 0 {
+			m.filterStr = string(r[:len(r)-1])
+			m.clampCursor()
+		}
+		return m, nil
+	case tea.KeySpace:
+		m.filterStr += " "
+		m.clampCursor()
+		return m, nil
+	case tea.KeyRunes:
+		if string(msg.Runes) == ";" { // leader: next key is a tool/action
+			m.awaiting = true
+			return m, nil
+		}
+		m.status = ""
+		m.filterStr += string(msg.Runes)
+		m.clampCursor()
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleLeader resolves the key pressed after ';' — the tool + action menu that the
+// bare letters used to be (freed up so typing can filter).
+func (m Model) handleLeader(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.status = ""
 	switch msg.String() {
-	case "q", "esc":
-		m.quit = true
-		return m, tea.Quit
+	case "c":
+		return m.launch(model.TargetClaude)
+	case "l":
+		return m.launch(model.TargetLazygit)
+	case "s":
+		return m.launch(model.TargetSerie)
+	case "o":
+		return m.launch(model.TargetDefault)
+	case "n":
+		if m.focus == focusMain && m.view == model.ViewBranches {
+			m.inMode = inputNewBranch
+			m.nameInput.SetValue("")
+			return m, m.nameInput.Focus()
+		}
+	case "f":
+		if m.focus == focusMain && m.view == model.ViewBranches {
+			if b := m.selectedBranch(); b != nil {
+				m.status = "fetching " + b.Name + "…"
+				return m, fetchBranchCmd(m.scopedPath(), *b, m.gen)
+			}
+		}
+	case "p":
+		if m.focus == focusMain && m.view == model.ViewBranches {
+			if b := m.selectedBranch(); b != nil {
+				m.status = "pulling " + b.Name + "…"
+				return m, pullBranchCmd(m.scopedPath(), *b, m.branchCheckoutPath(*b), m.gen)
+			}
+		}
 	case "d":
 		if m.focus == focusMain {
 			switch m.view {
@@ -351,7 +446,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.askDeleteBranch()
 			}
 		}
-		return m, nil
 	case "D":
 		if m.focus == focusMain {
 			switch m.view {
@@ -361,73 +455,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.askCleanBranches()
 			}
 		}
-		return m, nil
-	case "f":
-		if m.focus == focusMain && m.view == model.ViewBranches {
-			if b := m.selectedBranch(); b != nil {
-				m.status = "fetching " + b.Name + "…"
-				return m, fetchBranchCmd(m.scopedPath(), *b, m.gen)
-			}
-		}
-		return m, nil
-	case "p":
-		if m.focus == focusMain && m.view == model.ViewBranches {
-			if b := m.selectedBranch(); b != nil {
-				m.status = "pulling " + b.Name + "…"
-				return m, pullBranchCmd(m.scopedPath(), *b, m.branchCheckoutPath(*b), m.gen)
-			}
-		}
-		return m, nil
-	case "/":
-		m.inMode = inputFilter
-		return m, m.filter.Focus()
-	case "tab":
-		if m.focus == focusSidebar {
-			m.focus = focusMain
-		} else {
-			m.focus = focusSidebar
-		}
-		return m, nil
-	case "left":
-		m.view = m.view.Prev()
-		m.clampCursor()
-		return m, nil
-	case "right":
-		m.view = m.view.Next()
-		m.clampCursor()
-		return m, nil
-	case "up", "k":
-		m.move(-1)
-		return m, nil
-	case "down", "j":
-		m.move(1)
-		return m, nil
-	case "l":
-		return m.launch(model.TargetLazygit)
-	case "n":
-		if m.focus == focusMain && m.view == model.ViewBranches {
-			m.inMode = inputNewBranch
-			m.nameInput.SetValue("")
-			return m, m.nameInput.Focus()
-		}
-		return m, nil
-	case "enter":
-		// In the sidebar, enter SCOPES the panel to the repo (the common "drill in"
-		// action); o/c/l/s launch a tool on the repo root instead.
-		if m.focus == focusSidebar {
-			cmd := m.scopeReload(m.sideCur)
-			m.focus = focusMain
-			return m, cmd
-		}
-		return m.emit(model.TargetDefault)
-	case "o":
-		return m.launch(model.TargetDefault)
-	case "c":
-		return m.launch(model.TargetClaude)
-	case "s":
-		return m.launch(model.TargetSerie)
 	}
-	return m, nil
+	return m, nil // any other key after ';' is a no-op (leader already dismissed)
 }
 
 // handleConfirmKey resolves a pending destructive-action y/n prompt. Any non-yes
@@ -493,15 +522,19 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// clearConfirm drops the pending destructive action and its queued targets. It does
-// NOT touch autoDeleteBranch — that intent must survive the clearConfirm() that
-// precedes kicking a worktree removal.
+// clearConfirm drops the pending destructive action and its queued targets. It also
+// disarms a leader that an async message may have stranded behind the confirm (the
+// confirm is dispatched before `awaiting`, so a leftover `awaiting` would otherwise
+// eat the next keystroke after the confirm resolves). It does NOT touch
+// autoDeleteBranch — that intent must survive the clearConfirm() that precedes
+// kicking a worktree removal.
 func (m *Model) clearConfirm() {
 	m.confirm = confirmNone
 	m.confirmPaths = nil
 	m.delBranch = ""
 	m.cleanTargets = nil
 	m.dirtyFiles = 0
+	m.awaiting = false
 }
 
 // askDeleteBranch queues the selected branch for a safe delete (the current branch
@@ -766,45 +799,25 @@ func (m Model) emitRepo(t model.Target) (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
+// handleInputKey drives the modal new-branch name prompt (the only text input now that
+// filtering is always-on and inline).
 func (m Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		if m.inMode == inputFilter {
-			m.filter.SetValue("")
-			m.filter.Blur()
-			m.clampCursor()
-		} else {
-			m.nameInput.Blur()
-		}
+		m.nameInput.Blur()
 		m.inMode = inputNone
 		return m, nil
 	case "enter":
-		if m.inMode == inputNewBranch {
-			val := strings.TrimSpace(m.nameInput.Value())
-			m.nameInput.Blur()
-			m.inMode = inputNone
-			if val != "" {
-				return m.emitNewBranch(val)
-			}
-			return m, nil
-		}
-		m.filter.Blur()
+		val := strings.TrimSpace(m.nameInput.Value())
+		m.nameInput.Blur()
 		m.inMode = inputNone
-		return m, nil
-	case "up":
-		m.move(-1)
-		return m, nil
-	case "down":
-		m.move(1)
+		if val != "" {
+			return m.emitNewBranch(val)
+		}
 		return m, nil
 	}
 	var cmd tea.Cmd
-	if m.inMode == inputFilter {
-		m.filter, cmd = m.filter.Update(msg)
-		m.clampCursor()
-	} else {
-		m.nameInput, cmd = m.nameInput.Update(msg)
-	}
+	m.nameInput, cmd = m.nameInput.Update(msg)
 	return m, cmd
 }
 
@@ -906,7 +919,7 @@ func (m Model) rows(v model.View) []rowData {
 }
 
 func (m Model) filterQuery() string {
-	return strings.ToLower(strings.TrimSpace(m.filter.Value()))
+	return strings.ToLower(strings.TrimSpace(m.filterStr))
 }
 
 func (m Model) visibleRows() []rowData {
@@ -961,7 +974,7 @@ func (m Model) renderHeader(w int) string {
 	left := tab("PRs", m.view == model.ViewPRs) + " " +
 		tab("Branches", m.view == model.ViewBranches) + " " +
 		tab("Worktrees", m.view == model.ViewWorktrees)
-	if q := strings.TrimSpace(m.filter.Value()); q != "" {
+	if q := strings.TrimSpace(m.filterStr); q != "" {
 		right := styMeta.Render("🔎 " + q)
 		gap := w - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap > 1 {
@@ -1007,25 +1020,29 @@ func (m Model) renderFooter(w int) string {
 		}
 		hint = styErr.Render(verb+" with "+what+" — DISCARD them?  ") +
 			styHeading.Render("y") + styHint.Render(" discard · ") + styHeading.Render("n") + styHint.Render(" keep")
+	case m.awaiting: // leader pressed: show the tool/action menu it unlocks
+		menu := "c claude · l lazygit · s serie · o open"
+		if m.focus == focusMain && m.view == model.ViewBranches {
+			menu += " · n new · f fetch · p pull · d del · D clean"
+		} else if m.focus == focusMain && m.view == model.ViewWorktrees {
+			menu += " · d remove · D all"
+		}
+		hint = styHeading.Render("; ") + styHint.Render(menu)
 	case m.status != "":
 		hint = styHeading.Render(m.status)
-	case m.inMode == inputFilter:
-		hint = "filter: " + m.filter.View() + styHint.Render("   enter apply · esc clear")
 	case m.inMode == inputNewBranch:
 		hint = "new branch: " + m.nameInput.View() + styHint.Render("   enter create · esc cancel")
-	case m.focus == focusSidebar:
-		hint = styHint.Render("↑↓ repo · enter scope panel · o/c/l/s open repo here · ") +
-			styHeading.Render("tab → panel") + styHint.Render(" · q quit")
 	default:
-		extra := ""
-		if m.view == model.ViewBranches {
-			extra = "n new · f fetch · p pull · d del · D clean · "
+		clear := ""
+		if m.filterStr != "" {
+			clear = "esc clear · "
 		}
-		if m.view == model.ViewWorktrees {
-			extra = "d remove · D all · "
+		nav := "type to filter · ↑↓ move · ←→ view · enter open · "
+		if m.focus == focusSidebar {
+			nav = "type to filter · ↑↓ repo · enter scope · "
 		}
-		hint = styHint.Render("←→ view · ↑↓ move · o open · c claude · l lazygit · s serie · "+extra+"/ filter · ") +
-			styHeading.Render("tab → repos") + styHint.Render(" · q quit")
+		hint = styHint.Render(clear+nav) +
+			styHeading.Render("; tools/actions") + styHint.Render(" · tab focus · ^C quit")
 	}
 	// MaxWidth (not Width) so an over-long hint truncates to one line rather than
 	// wrapping; the most useful hints lead, the trailing ones drop first.

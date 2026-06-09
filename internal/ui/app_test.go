@@ -21,6 +21,31 @@ func step(t *testing.T, m Model, msg tea.Msg) Model {
 
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
+// keymap test helpers for the type-to-filter model: bare letters now filter, so
+// tools/actions go through the ';' leader, navigation uses the arrow keys, and the
+// only quit is Ctrl+C.
+var (
+	down  = tea.KeyMsg{Type: tea.KeyDown}
+	up    = tea.KeyMsg{Type: tea.KeyUp}
+	ctrlC = tea.KeyMsg{Type: tea.KeyCtrlC}
+)
+
+// leader sends ';' then the action key (e.g. leader(m,"c") = launch claude).
+func leader(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	m = step(t, m, key(";"))
+	return step(t, m, key(s))
+}
+
+// typeStr feeds each rune as a key press (drives the live filter or a modal input).
+func typeStr(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	for _, r := range s {
+		m = step(t, m, key(string(r)))
+	}
+	return m
+}
+
 func loadedModel(t *testing.T) Model {
 	t.Helper()
 	m := New()
@@ -46,9 +71,9 @@ func TestPickPREmitsContract(t *testing.T) {
 	if m.state[model.ViewPRs] != stateReady {
 		t.Fatalf("state = %v, want ready", m.state[model.ViewPRs])
 	}
-	m = step(t, m, key("c")) // claude on the first PR
+	m = leader(t, m, "c") // claude on the first PR
 	if m.Selection() == nil {
-		t.Fatal("expected a selection after pressing c")
+		t.Fatal("expected a selection after ; c")
 	}
 	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tclaude\n" {
 		t.Errorf("Encode() = %q", got)
@@ -57,8 +82,8 @@ func TestPickPREmitsContract(t *testing.T) {
 
 func TestPickPRSecondRowLazygit(t *testing.T) {
 	m := loadedModel(t)
-	m = step(t, m, key("j")) // move to PR #232
-	m = step(t, m, key("l")) // lazygit
+	m = step(t, m, down)  // move to PR #232
+	m = leader(t, m, "l") // lazygit
 	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t232\tlazygit\n" {
 		t.Errorf("Encode() = %q", got)
 	}
@@ -66,7 +91,7 @@ func TestPickPRSecondRowLazygit(t *testing.T) {
 
 func TestCancelEmitsNothing(t *testing.T) {
 	m := loadedModel(t)
-	m = step(t, m, key("q"))
+	m = step(t, m, ctrlC)
 	if !m.quit {
 		t.Error("expected quit flag")
 	}
@@ -105,7 +130,7 @@ func TestSwitchToBranchesAndPick(t *testing.T) {
 	if m.view != model.ViewBranches {
 		t.Fatalf("view = %v, want Branches", m.view)
 	}
-	m = step(t, m, key("c"))
+	m = leader(t, m, "c")
 	if m.Selection() == nil || m.Selection().Encode() != "v1\tbranch\t/r\tmain\tclaude\n" {
 		t.Errorf("branch pick = %v", m.Selection())
 	}
@@ -117,7 +142,7 @@ func TestSidebarLaunchesRepoRoot(t *testing.T) {
 	if m.focus != focusSidebar {
 		t.Fatalf("focus = %v, want sidebar", m.focus)
 	}
-	m = step(t, m, key("c")) // launch claude on the highlighted repo's root
+	m = leader(t, m, "c") // launch claude on the highlighted repo's root
 	sel := m.Selection()
 	if sel == nil || sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" || sel.Tool != "claude" {
 		t.Errorf("sidebar repo launch = %+v", sel)
@@ -139,13 +164,11 @@ func TestSidebarEnterScopesNotLaunch(t *testing.T) {
 func TestNewBranchAction(t *testing.T) {
 	m := loadedModel(t)
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // -> Branches
-	m = step(t, m, key("n"))                       // new-branch prompt
+	m = leader(t, m, "n")                          // new-branch prompt
 	if m.inMode != inputNewBranch {
 		t.Fatalf("inMode = %v, want newBranch", m.inMode)
 	}
-	for _, r := range "feat/zzz" {
-		m = step(t, m, key(string(r)))
-	}
+	m = typeStr(t, m, "feat/zzz")
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.Selection() == nil || m.Selection().Encode() != "v1\tbranch\t/r\tfeat/zzz\tclaude\n" {
 		t.Errorf("new-branch pick = %v", m.Selection())
@@ -155,12 +178,17 @@ func TestNewBranchAction(t *testing.T) {
 func TestFilterReducesRows(t *testing.T) {
 	m := loadedModel(t)
 	all := len(m.visibleRows())
-	m = step(t, m, key("/"))
-	for _, r := range "289" {
-		m = step(t, m, key(string(r)))
-	}
+	m = typeStr(t, m, "289") // type-to-filter: no '/' needed
 	got := len(m.visibleRows())
 	if got >= all || got != 1 {
 		t.Errorf("filtered rows = %d (was %d), want 1", got, all)
+	}
+	// esc clears the filter (and must NOT quit)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.quit {
+		t.Error("esc must not quit the TUI")
+	}
+	if len(m.visibleRows()) != all {
+		t.Errorf("esc should clear the filter back to %d rows, got %d", all, len(m.visibleRows()))
 	}
 }

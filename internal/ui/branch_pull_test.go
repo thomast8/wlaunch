@@ -20,11 +20,12 @@ func branchesView(t *testing.T) Model {
 }
 
 func TestFetchKeyKicksRefresh(t *testing.T) {
-	m := branchesView(t) // cursor 0 = "main" (has upstream, from loadedModel)
+	m := branchesView(t)     // cursor 0 = "main" (has upstream, from loadedModel)
+	m = step(t, m, key(";")) // leader
 	nm, cmd := m.Update(key("f"))
 	m = nm.(Model)
 	if cmd == nil {
-		t.Error("f should return a fetch command")
+		t.Error("; f should return a fetch command")
 	}
 	if !strings.HasPrefix(m.status, "fetching ") {
 		t.Errorf("status = %q, want 'fetching <branch>…'", m.status)
@@ -32,11 +33,12 @@ func TestFetchKeyKicksRefresh(t *testing.T) {
 }
 
 func TestPullKeyKicksRefresh(t *testing.T) {
-	m := branchesView(t) // cursor 0 = "main" (has upstream, from loadedModel)
+	m := branchesView(t)     // cursor 0 = "main" (has upstream, from loadedModel)
+	m = step(t, m, key(";")) // leader
 	nm, cmd := m.Update(key("p"))
 	m = nm.(Model)
 	if cmd == nil {
-		t.Error("p should return a pull command")
+		t.Error("; p should return a pull command")
 	}
 	if !strings.HasPrefix(m.status, "pulling ") {
 		t.Errorf("status = %q, want 'pulling …'", m.status)
@@ -45,10 +47,10 @@ func TestPullKeyKicksRefresh(t *testing.T) {
 
 func TestFetchPullIgnoredOutsideBranches(t *testing.T) {
 	m := loadedModel(t) // PRs view
-	_, cmdF := m.Update(key("f"))
-	_, cmdP := m.Update(key("p"))
+	_, cmdF := step(t, m, key(";")).Update(key("f"))
+	_, cmdP := step(t, m, key(";")).Update(key("p"))
 	if cmdF != nil || cmdP != nil {
-		t.Error("f/p should do nothing outside the Branches view")
+		t.Error("; f / ; p should do nothing outside the Branches view")
 	}
 }
 

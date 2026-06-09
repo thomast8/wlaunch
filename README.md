@@ -35,24 +35,28 @@ The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
 
 ## Keys
 
+**Just type to filter** — printable keys narrow the current view live; no `/` to enter
+a mode. Tools and actions live behind a `;` leader, so the letters stay free for typing.
+`esc` clears the filter (it never quits); `Ctrl+C` is the only quit.
+
 | key | action |
 |-----|--------|
+| type any text | filter the current view live |
+| `esc` | clear the filter (does **not** quit) |
+| `↑` `↓` | move within the list |
 | `←` / `→` | switch view (PRs · Branches · Worktrees) |
-| `↑` `↓` / `k` `j` | move within the list |
 | `tab` | toggle focus between the repo sidebar and the panel |
 | `enter` (sidebar) | scope the panel to that repo |
-| `o` `c` `l` `s` (sidebar) | open the repo root in default / claude / lazygit / serie |
-| `o` / `enter` (panel) | open the selection (default tool) |
-| `c` / `l` / `s` (panel) | open the selection in claude / lazygit / serie |
-| `n` (branches) | create a new branch worktree |
-| `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
-| `p` (branches) | pull / fast-forward the selected branch to its upstream (ff-only, safe; in-place for checked-out branches) |
-| `d` (branches) | delete the selected branch (y/n; safe `-d`, escalates to a force confirm if unmerged). If it's checked out in a worktree, offers to remove that worktree first, then delete |
-| `D` (branches) | clean (respects the filter): force-delete `gone` branches + safe-delete no-upstream ones (git skips any with unmerged commits; current + checked-out excluded) |
-| `d` (worktrees) | remove the selected worktree (y/n; branch kept). A dirty worktree is skipped but then offers a force-remove confirm that names how many uncommitted files it would discard. On success, offers to delete the now-freed branch |
-| `D` (worktrees) | remove all worktrees here (respects the filter; main skipped). Dirty ones are collected into a single force-remove confirm; then offers to delete the freed branches |
-| `/` | filter the current view |
-| `q` / `esc` | cancel |
+| `enter` (panel) | open the selection with the default tool |
+| `;` then `o` `c` `l` `s` | open the selection (or sidebar repo) in default / claude / lazygit / serie |
+| `;` then `n` (branches) | create a new branch worktree |
+| `;` then `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
+| `;` then `p` (branches) | pull / fast-forward the selected branch (ff-only, safe; in-place for checked-out branches) |
+| `;` then `d` (branches) | delete the selected branch (y/n; safe `-d`, escalates to a force confirm if unmerged). If it's checked out in a worktree, offers to remove that worktree first |
+| `;` then `D` (branches) | clean (respects the filter): force-delete `gone` branches + safe-delete no-upstream ones (git skips any with unmerged commits; current + checked-out excluded) |
+| `;` then `d` (worktrees) | remove the selected worktree (branch kept). A dirty worktree is skipped, then offers a force-remove confirm naming how many uncommitted files it would discard. On success, offers to delete the freed branch |
+| `;` then `D` (worktrees) | remove all worktrees here (respects the filter; main skipped). Dirty ones go into one force-remove confirm; then offers to delete the freed branches |
+| `Ctrl+C` | quit / cancel (drops to a shell) |
 
 The sidebar lists your recent repos plus everything under `~/GitRepos`. The `●`
 marks the repo the panel is scoped to.
@@ -65,8 +69,8 @@ The middle column in the Branches view summarizes each branch against its upstre
 |--------|---------|
 | `✓` | tracks an upstream and is in sync |
 | `↑N` / `↓N` / `↑N↓M` | N commits ahead / behind / both of the upstream |
-| `gone` | had an upstream, but the remote branch was deleted (PR merged/closed) — what `D` force-deletes |
-| `local` | no upstream at all (never pushed); nothing to `p` (pull), and `D` safe-deletes it if it holds no unmerged commits |
+| `gone` | had an upstream, but the remote branch was deleted (PR merged/closed) — what `;D` force-deletes |
+| `local` | no upstream at all (never pushed); nothing to pull, and `;D` safe-deletes it if it holds no unmerged commits |
 
 Worktree/branch deletion are linked: removing a worktree offers to delete its branch,
 and deleting a checked-out branch offers to remove its worktree first — so a branch

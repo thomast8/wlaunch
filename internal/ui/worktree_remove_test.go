@@ -24,7 +24,7 @@ func worktreeModel(t *testing.T) Model {
 
 func TestRemoveMainBlocked(t *testing.T) {
 	m := worktreeModel(t) // cursor 0 = the main checkout (IsMain)
-	m = step(t, m, key("d"))
+	m = leader(t, m, "d")
 	if m.confirm != confirmNone {
 		t.Errorf("the main checkout must not enter a remove confirm")
 	}
@@ -35,8 +35,8 @@ func TestRemoveMainBlocked(t *testing.T) {
 
 func TestRemoveOneConfirmThenCancel(t *testing.T) {
 	m := worktreeModel(t)
-	m = step(t, m, key("j")) // move to the non-main worktree (/wt/pr289)
-	m = step(t, m, key("d"))
+	m = step(t, m, down) // move to the non-main worktree (/wt/pr289)
+	m = leader(t, m, "d")
 	if m.confirm != confirmRemoveOne {
 		t.Fatalf("confirm = %v, want confirmRemoveOne", m.confirm)
 	}
@@ -51,8 +51,8 @@ func TestRemoveOneConfirmThenCancel(t *testing.T) {
 
 func TestRemoveOneConfirmYesKicksRemoval(t *testing.T) {
 	m := worktreeModel(t)
-	m = step(t, m, key("j"))
-	m = step(t, m, key("d"))
+	m = step(t, m, down)
+	m = leader(t, m, "d")
 	nm, cmd := m.Update(key("y"))
 	m = nm.(Model)
 	if m.confirm != confirmNone {
@@ -90,7 +90,7 @@ func TestRemovalSplicesInMemory(t *testing.T) {
 
 func TestRemoveAllExcludesMain(t *testing.T) {
 	m := worktreeModel(t)
-	m = step(t, m, key("D"))
+	m = leader(t, m, "D")
 	if m.confirm != confirmRemoveAll {
 		t.Fatalf("confirm = %v, want confirmRemoveAll", m.confirm)
 	}
@@ -101,8 +101,8 @@ func TestRemoveAllExcludesMain(t *testing.T) {
 
 func TestRemoveKeysIgnoredOutsideWorktrees(t *testing.T) {
 	m := loadedModel(t) // PRs view
-	m = step(t, m, key("d"))
-	m = step(t, m, key("D"))
+	m = leader(t, m, "d")
+	m = leader(t, m, "D")
 	if m.confirm != confirmNone {
 		t.Errorf("d/D should do nothing outside the Worktrees view")
 	}
