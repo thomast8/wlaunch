@@ -1,6 +1,10 @@
 package gh
 
-import "testing"
+import (
+	"context"
+	"os/exec"
+	"testing"
+)
 
 func TestParsePRs(t *testing.T) {
 	in := []byte(`[
@@ -35,5 +39,31 @@ func TestParsePRsEmpty(t *testing.T) {
 func TestParsePRsMalformed(t *testing.T) {
 	if _, err := parsePRs([]byte(`not json`)); err == nil {
 		t.Fatal("expected error on malformed JSON")
+	}
+}
+
+func TestAccountForUnset(t *testing.T) {
+	dir := t.TempDir()
+	mustGit(t, dir, "init")
+	if got := accountFor(context.Background(), dir); got != "" {
+		t.Errorf("accountFor = %q, want empty for unset key", got)
+	}
+}
+
+func TestAccountForSet(t *testing.T) {
+	dir := t.TempDir()
+	mustGit(t, dir, "init")
+	mustGit(t, dir, "config", "wlaunch.ghaccount", "some-account")
+	if got := accountFor(context.Background(), dir); got != "some-account" {
+		t.Errorf("accountFor = %q, want some-account", got)
+	}
+}
+
+func mustGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
