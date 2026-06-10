@@ -2,9 +2,19 @@ package gh
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"testing"
 )
+
+// isolateGitConfig points git at empty global/system config files so a developer's
+// real ~/.gitconfig (which may set wlaunch.ghaccount as the personal default) can't
+// leak into the per-repo config lookups these tests assert on.
+func isolateGitConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+}
 
 func TestParsePRs(t *testing.T) {
 	in := []byte(`[
@@ -43,6 +53,7 @@ func TestParsePRsMalformed(t *testing.T) {
 }
 
 func TestAccountForUnset(t *testing.T) {
+	isolateGitConfig(t)
 	dir := t.TempDir()
 	mustGit(t, dir, "init")
 	if got := accountFor(context.Background(), dir); got != "" {
@@ -51,6 +62,7 @@ func TestAccountForUnset(t *testing.T) {
 }
 
 func TestAccountForSet(t *testing.T) {
+	isolateGitConfig(t)
 	dir := t.TempDir()
 	mustGit(t, dir, "init")
 	mustGit(t, dir, "config", "wlaunch.ghaccount", "some-account")
