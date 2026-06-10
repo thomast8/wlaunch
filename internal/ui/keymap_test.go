@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -88,5 +89,15 @@ func TestBackspaceEditsFilter(t *testing.T) {
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
 	if m.filterStr != "fea" {
 		t.Errorf("filterStr = %q, want 'fea' after backspace", m.filterStr)
+	}
+}
+
+func TestFriendlyNoRemotes(t *testing.T) {
+	// gh's phrasing when a repo has no remotes at all (`gh pr list` in a
+	// local-only repo) must map to the same friendly line as the other
+	// no-remote variants.
+	got := friendly(errors.New("gh: exit status 1: no git remotes found"))
+	if got != "no GitHub remote configured." {
+		t.Errorf("friendly = %q", got)
 	}
 }

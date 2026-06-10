@@ -229,7 +229,7 @@ func friendly(err error) string {
 		return "timed out."
 	case strings.Contains(s, "auth"):
 		return "gh isn't authenticated for this repo (gh auth login)."
-	case strings.Contains(s, "no default remote"), strings.Contains(s, "none of the git remotes"):
+	case strings.Contains(s, "no default remote"), strings.Contains(s, "none of the git remotes"), strings.Contains(s, "no git remotes found"):
 		return "no GitHub remote configured."
 	case strings.Contains(s, "not a git repository"):
 		return "not a git repository."
