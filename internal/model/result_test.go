@@ -8,10 +8,11 @@ func TestSelectionEncode(t *testing.T) {
 		sel  Selection
 		want string
 	}{
-		{"pr", Selection{Kind: KindPR, RepoRoot: "/r", Ref: "289", Tool: "claude"}, "v1\tpr\t/r\t289\tclaude\n"},
-		{"branch", Selection{Kind: KindBranch, RepoRoot: "/r", Ref: "feat/x", Tool: "lazygit"}, "v1\tbranch\t/r\tfeat/x\tlazygit\n"},
-		{"worktree", Selection{Kind: KindWorktree, RepoRoot: "/r", Ref: "/wt/pr289", Tool: "serie"}, "v1\tworktree\t/r\t/wt/pr289\tserie\n"},
-		{"repo", Selection{Kind: KindRepo, RepoRoot: "/r", Ref: "", Tool: "shell"}, "v1\trepo\t/r\t\tshell\n"},
+		{"pr", Selection{Kind: KindPR, RepoRoot: "/r", Ref: "289", Tool: "claude"}, "v1\tpr\t/r\t289\tclaude\t\n"},
+		{"branch", Selection{Kind: KindBranch, RepoRoot: "/r", Ref: "feat/x", Tool: "lazygit"}, "v1\tbranch\t/r\tfeat/x\tlazygit\t\n"},
+		{"branch-with-base", Selection{Kind: KindBranch, RepoRoot: "/r", Ref: "feat/x", Tool: "claude", Base: "origin/dev"}, "v1\tbranch\t/r\tfeat/x\tclaude\torigin/dev\n"},
+		{"worktree", Selection{Kind: KindWorktree, RepoRoot: "/r", Ref: "/wt/pr289", Tool: "serie"}, "v1\tworktree\t/r\t/wt/pr289\tserie\t\n"},
+		{"repo", Selection{Kind: KindRepo, RepoRoot: "/r", Ref: "", Tool: "shell"}, "v1\trepo\t/r\t\tshell\t\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

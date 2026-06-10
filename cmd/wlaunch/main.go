@@ -15,11 +15,12 @@ import (
 
 func main() {
 	// Headless bypass for tests/CI: emit a contract line without the UI, so the
-	// stdout format and the wl wrapper's parsing are assertable without a tty.
-	//   wlaunch --print-selection <kind> <repo_root> <ref> <tool>
+	// stdout format and the wl wrapper's parsing are assertable without a tty. The
+	// base is optional (only branch picks carry one).
+	//   wlaunch --print-selection <kind> <repo_root> <ref> <tool> [base]
 	if len(os.Args) > 1 && os.Args[1] == "--print-selection" {
-		if len(os.Args) != 6 {
-			fmt.Fprintln(os.Stderr, "usage: wlaunch --print-selection <kind> <repo_root> <ref> <tool>")
+		if len(os.Args) != 6 && len(os.Args) != 7 {
+			fmt.Fprintln(os.Stderr, "usage: wlaunch --print-selection <kind> <repo_root> <ref> <tool> [base]")
 			os.Exit(2)
 		}
 		sel := model.Selection{
@@ -27,6 +28,9 @@ func main() {
 			RepoRoot: os.Args[3],
 			Ref:      os.Args[4],
 			Tool:     os.Args[5],
+		}
+		if len(os.Args) == 7 {
+			sel.Base = os.Args[6]
 		}
 		fmt.Fprint(os.Stdout, sel.Encode())
 		return

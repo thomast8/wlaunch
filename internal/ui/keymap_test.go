@@ -77,7 +77,7 @@ func TestCtrlOOpensShell(t *testing.T) {
 	if m.Selection() == nil {
 		t.Fatal("Ctrl+O should launch the selection")
 	}
-	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\n" {
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\t\n" {
 		t.Errorf("Ctrl+O Encode() = %q, want a shell launch", got)
 	}
 }

@@ -37,8 +37,9 @@ const (
 type inputMode int
 
 const (
-	inputNone inputMode = iota
-	inputNewBranch
+	inputNone      inputMode = iota
+	inputNewWtName           // stage 1 of the new-worktree prompt: the branch/worktree name
+	inputNewWtBase           // stage 2: the ref to branch from
 )
 
 // confirmMode gates the destructive worktree-removal actions behind a y/n prompt.
@@ -91,9 +92,13 @@ type Model struct {
 	spinner spinner.Model
 
 	inMode    inputMode
-	filterStr string // live type-to-filter query (always on; no mode to enter)
-	awaiting  bool   // true after ';' — next key is a tool/action from the leader menu
-	nameInput textinput.Model
+	filterStr string          // live type-to-filter query (always on; no mode to enter)
+	awaiting  bool            // true after ';' — next key is a tool/action from the leader menu
+	nameInput textinput.Model // stage-1 name field of the new-worktree prompt
+	baseInput textinput.Model // stage-2 base-ref field of the new-worktree prompt
+
+	wtRepoPath string // target repo captured when the new-worktree flow starts
+	wtName     string // name chosen in stage 1, carried into stage 2
 
 	confirm          confirmMode         // pending y/n for a destructive action
 	confirmPaths     []string            // worktree paths queued for removal
@@ -114,13 +119,15 @@ func New() Model {
 
 	ni := textinput.New()
 	ni.Prompt = ""
-	ni.Placeholder = "new-branch-name"
+	bi := textinput.New()
+	bi.Prompt = ""
 
 	return Model{
 		focus:     focusMain,
 		view:      model.ViewPRs,
 		spinner:   sp,
 		nameInput: ni,
+		baseInput: bi,
 	}
 }
 
@@ -329,7 +336,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.confirm != confirmNone {
 		return m.handleConfirmKey(msg)
 	}
-	if m.inMode == inputNewBranch {
+	if m.inMode != inputNone {
 		return m.handleInputKey(msg)
 	}
 	if m.awaiting { // previous key was ';' — resolve the leader menu
@@ -424,11 +431,7 @@ func (m Model) handleLeader(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		return m.launch(model.TargetShell) // "open" = a plain terminal in the worktree
 	case "n":
-		if m.focus == focusMain && m.view == model.ViewBranches {
-			m.inMode = inputNewBranch
-			m.nameInput.SetValue("")
-			return m, m.nameInput.Focus()
-		}
+		return m.startNewWorktree()
 	case "f":
 		if m.focus == focusMain && m.view == model.ViewBranches {
 			if b := m.selectedBranch(); b != nil {
@@ -805,26 +808,114 @@ func (m Model) emitRepo(t model.Target) (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-// handleInputKey drives the modal new-branch name prompt (the only text input now that
-// filtering is always-on and inline).
+// startNewWorktree opens the two-stage new-worktree prompt for the target repo:
+// the highlighted sidebar repo when the sidebar has focus, else the scoped (●) repo.
+// It works from any view. Stage 1 collects a name (placeholder = a random
+// adjective-noun slug that dodges existing names), stage 2 a ref to branch from
+// (placeholder = the repo's detected default branch). An empty field accepts the
+// placeholder, so two Enters = "random name off the default branch".
+func (m Model) startNewWorktree() (tea.Model, tea.Cmd) {
+	idx := m.scopedIdx
+	if m.focus == focusSidebar {
+		idx = m.sideCur
+	}
+	if idx < 0 || idx >= len(m.repos) {
+		m.status = "no repo to create a worktree in"
+		return m, nil
+	}
+	m.wtRepoPath = m.repos[idx].Path
+	m.nameInput.SetValue("")
+	m.nameInput.Placeholder = randomNameAvoiding(m.takenNames(idx))
+	m.baseInput.SetValue("")
+	m.baseInput.Placeholder = m.defaultBase(idx)
+	m.baseInput.Blur()
+	m.inMode = inputNewWtName
+	return m, m.nameInput.Focus()
+}
+
+// takenNames is the set of branch + worktree-branch names already in use in the
+// target repo, so the random suggestion never collides. Only the scoped repo's
+// branches/worktrees are loaded, so an empty set is returned for any other repo.
+func (m Model) takenNames(idx int) map[string]bool {
+	taken := map[string]bool{}
+	if idx != m.scopedIdx {
+		return taken
+	}
+	for _, b := range m.branches {
+		taken[b.Name] = true
+	}
+	for _, wt := range m.worktrees {
+		if wt.Branch != "" {
+			taken[wt.Branch] = true
+		}
+	}
+	return taken
+}
+
+// defaultBase is the branch shown as the stage-2 placeholder: the main checkout's
+// branch, else main/master if present, else "main". Only informational — an empty
+// base field emits an empty Base so worktree-setup.sh re-detects (and fetches)
+// origin's default; the placeholder just tells the user what that will be.
+func (m Model) defaultBase(idx int) string {
+	if idx == m.scopedIdx {
+		for _, wt := range m.worktrees {
+			if wt.IsMain && wt.Branch != "" {
+				return wt.Branch
+			}
+		}
+		has := map[string]bool{}
+		for _, b := range m.branches {
+			has[b.Name] = true
+		}
+		for _, name := range []string{"main", "master"} {
+			if has[name] {
+				return name
+			}
+		}
+	}
+	return "main"
+}
+
+// handleInputKey drives the two-stage modal new-worktree prompt. Stage 1 captures
+// the name (empty → the random placeholder, since the name must be concrete or the
+// downstream script would prompt on stdin); stage 2 captures the base, where empty
+// stays empty so the script auto-detects origin's default. esc cancels the flow.
 func (m Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.nameInput.Blur()
-		m.inMode = inputNone
-		return m, nil
+		return m.cancelNewWorktree(), nil
 	case "enter":
-		val := strings.TrimSpace(m.nameInput.Value())
-		m.nameInput.Blur()
-		m.inMode = inputNone
-		if val != "" {
-			return m.emitNewBranch(val)
+		if m.inMode == inputNewWtName {
+			name := strings.TrimSpace(m.nameInput.Value())
+			if name == "" {
+				name = m.nameInput.Placeholder
+			}
+			m.wtName = name
+			m.nameInput.Blur()
+			m.inMode = inputNewWtBase
+			return m, m.baseInput.Focus()
 		}
-		return m, nil
+		base := strings.TrimSpace(m.baseInput.Value())
+		m.baseInput.Blur()
+		m.inMode = inputNone
+		return m.emitNewWorktree(m.wtName, base)
 	}
 	var cmd tea.Cmd
-	m.nameInput, cmd = m.nameInput.Update(msg)
+	if m.inMode == inputNewWtName {
+		m.nameInput, cmd = m.nameInput.Update(msg)
+	} else {
+		m.baseInput, cmd = m.baseInput.Update(msg)
+	}
 	return m, cmd
+}
+
+// cancelNewWorktree drops the in-progress new-worktree flow and clears its state.
+func (m Model) cancelNewWorktree() Model {
+	m.nameInput.Blur()
+	m.baseInput.Blur()
+	m.inMode = inputNone
+	m.wtName, m.wtRepoPath = "", ""
+	return m
 }
 
 func (m *Model) move(d int) {
@@ -862,14 +953,17 @@ func (m Model) emit(t model.Target) (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m Model) emitNewBranch(name string) (tea.Model, tea.Cmd) {
-	if m.scopedIdx < 0 || m.scopedIdx >= len(m.repos) {
+// emitNewWorktree records the new-branch-worktree pick: Kind=branch with the chosen
+// name as Ref and the chosen base (possibly empty → script auto-detect) as Base.
+func (m Model) emitNewWorktree(name, base string) (tea.Model, tea.Cmd) {
+	if m.wtRepoPath == "" || name == "" {
 		return m, nil
 	}
 	m.selection = &model.Selection{
 		Kind:     model.KindBranch,
-		RepoRoot: m.repos[m.scopedIdx].Path,
+		RepoRoot: m.wtRepoPath,
 		Ref:      name,
+		Base:     base,
 		Tool:     model.TargetDefault.Tool(),
 	}
 	return m, tea.Quit
@@ -1027,17 +1121,19 @@ func (m Model) renderFooter(w int) string {
 		hint = styErr.Render(verb+" with "+what+" — DISCARD them?  ") +
 			styHeading.Render("y") + styHint.Render(" discard · ") + styHeading.Render("n") + styHint.Render(" keep")
 	case m.awaiting: // leader pressed: show the tool/action menu it unlocks
-		menu := "c claude · l lazygit · s serie · o shell"
+		menu := "c claude · l lazygit · s serie · o shell · n new"
 		if m.focus == focusMain && m.view == model.ViewBranches {
-			menu += " · n new · f fetch · p pull · d del · D clean"
+			menu += " · f fetch · p pull · d del · D clean"
 		} else if m.focus == focusMain && m.view == model.ViewWorktrees {
 			menu += " · d remove · D all"
 		}
 		hint = styHeading.Render("; ") + styHint.Render(menu)
 	case m.status != "":
 		hint = styHeading.Render(m.status)
-	case m.inMode == inputNewBranch:
-		hint = "new branch: " + m.nameInput.View() + styHint.Render("   enter create · esc cancel")
+	case m.inMode == inputNewWtName:
+		hint = "new worktree — name: " + m.nameInput.View() + styHint.Render("   enter next · esc cancel")
+	case m.inMode == inputNewWtBase:
+		hint = "new worktree — base (branch from): " + m.baseInput.View() + styHint.Render("   enter create · esc cancel")
 	default:
 		clear := ""
 		if m.filterStr != "" {

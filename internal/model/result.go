@@ -20,6 +20,7 @@ type Selection struct {
 	RepoRoot string // absolute main-checkout root; always set
 	Ref      string // PR number | branch name | worktree path | "" for repo
 	Tool     string // claude | lazygit | serie | shell
+	Base     string // ref a new-branch worktree is created from; "" = let the script auto-detect. Only meaningful for KindBranch.
 }
 
 // schemaVersion is the leading field of the contract. Bump only on a breaking
@@ -27,7 +28,9 @@ type Selection struct {
 const schemaVersion = "v1"
 
 // Encode renders the one-line, tab-separated result with a trailing newline,
-// mirroring the `printf '%s\n'` convention of the bin scripts.
+// mirroring the `printf '%s\n'` convention of the bin scripts. Base is appended
+// as a trailing field, so older wrappers that read only the first five fields
+// ignore it and non-branch kinds simply leave it empty.
 func (s Selection) Encode() string {
 	return strings.Join([]string{
 		schemaVersion,
@@ -35,5 +38,6 @@ func (s Selection) Encode() string {
 		s.RepoRoot,
 		s.Ref,
 		s.Tool,
+		s.Base,
 	}, "\t") + "\n"
 }

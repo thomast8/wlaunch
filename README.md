@@ -19,7 +19,7 @@ to **stdout**, then exits 0. Cancel prints nothing and exits 130. That keeps
 stdout a clean data channel so it can be captured:
 
 ```
-v1<TAB><kind><TAB><repo_root><TAB><ref><TAB><tool>
+v1<TAB><kind><TAB><repo_root><TAB><ref><TAB><tool><TAB><base>
 ```
 
 | field | values | meaning |
@@ -29,6 +29,7 @@ v1<TAB><kind><TAB><repo_root><TAB><ref><TAB><tool>
 | repo_root | absolute path | the scoped repo's main checkout |
 | ref | PR number \| branch name \| worktree path \| (empty) | the thing to open |
 | tool | `claude` \| `lazygit` \| `serie` \| `shell` | what to launch after `cd` |
+| base | branch/ref \| (empty) | for a new-branch worktree, the ref to branch from; empty lets `worktree-setup.sh` auto-detect origin's default. Empty for every other kind. |
 
 The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
 `worktree-setup.sh` for PR/branch worktrees) and launches `tool` there.
@@ -50,7 +51,7 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 | `enter` (panel) | launch the selection in claude (the default action) |
 | `Ctrl+O` (panel) | open the selection in a plain shell (Enter-modifiers like Shift/Ctrl+Enter can't be detected by terminals, so a Ctrl-chord is used; `o` = open) |
 | `;` then `c` `l` `s` `o` | open the selection (or sidebar repo) in claude / lazygit / serie / a plain shell |
-| `;` then `n` (branches) | create a new branch worktree |
+| `;` then `n` (any view) | create a new-branch worktree in the scoped repo (or the highlighted sidebar repo). Two-stage prompt: a **name** (placeholder is a random `adjective-noun` slug — empty Enter takes it) then a **base** to branch from (placeholder is the repo's detected default branch — empty Enter lets the script auto-detect origin's default). So two Enters = "random name off the default branch" |
 | `;` then `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
 | `;` then `p` (branches) | pull / fast-forward the selected branch (ff-only, safe; in-place for checked-out branches) |
 | `;` then `d` (branches) | delete the selected branch (y/n; safe `-d`, escalates to a force confirm if unmerged). If it's checked out in a worktree, offers to remove that worktree first |

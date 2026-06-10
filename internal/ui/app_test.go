@@ -75,7 +75,7 @@ func TestPickPREmitsContract(t *testing.T) {
 	if m.Selection() == nil {
 		t.Fatal("expected a selection after ; c")
 	}
-	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tclaude\n" {
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tclaude\t\n" {
 		t.Errorf("Encode() = %q", got)
 	}
 }
@@ -87,7 +87,7 @@ func TestLeaderOpenIsShellNotClaude(t *testing.T) {
 	if m.Selection() == nil {
 		t.Fatal("expected a selection after ; o")
 	}
-	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\n" {
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\t\n" {
 		t.Errorf("Encode() = %q, want a shell launch", got)
 	}
 }
@@ -96,7 +96,7 @@ func TestPickPRSecondRowLazygit(t *testing.T) {
 	m := loadedModel(t)
 	m = step(t, m, down)  // move to PR #232
 	m = leader(t, m, "l") // lazygit
-	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t232\tlazygit\n" {
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t232\tlazygit\t\n" {
 		t.Errorf("Encode() = %q", got)
 	}
 }
@@ -143,7 +143,7 @@ func TestSwitchToBranchesAndPick(t *testing.T) {
 		t.Fatalf("view = %v, want Branches", m.view)
 	}
 	m = leader(t, m, "c")
-	if m.Selection() == nil || m.Selection().Encode() != "v1\tbranch\t/r\tmain\tclaude\n" {
+	if m.Selection() == nil || m.Selection().Encode() != "v1\tbranch\t/r\tmain\tclaude\t\n" {
 		t.Errorf("branch pick = %v", m.Selection())
 	}
 }
@@ -173,17 +173,81 @@ func TestSidebarEnterScopesNotLaunch(t *testing.T) {
 	}
 }
 
-func TestNewBranchAction(t *testing.T) {
+// The two-stage new-worktree flow: a typed name then a typed base emits a branch
+// pick carrying both.
+func TestNewWorktreeTypedNameAndBase(t *testing.T) {
 	m := loadedModel(t)
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // -> Branches
-	m = leader(t, m, "n")                          // new-branch prompt
-	if m.inMode != inputNewBranch {
-		t.Fatalf("inMode = %v, want newBranch", m.inMode)
+	m = leader(t, m, "n")                          // stage 1: name prompt
+	if m.inMode != inputNewWtName {
+		t.Fatalf("inMode = %v, want inputNewWtName", m.inMode)
 	}
 	m = typeStr(t, m, "feat/zzz")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // -> stage 2: base prompt
+	if m.inMode != inputNewWtBase {
+		t.Fatalf("inMode = %v, want inputNewWtBase", m.inMode)
+	}
+	m = typeStr(t, m, "origin/dev")
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.Selection() == nil || m.Selection().Encode() != "v1\tbranch\t/r\tfeat/zzz\tclaude\n" {
-		t.Errorf("new-branch pick = %v", m.Selection())
+	if m.Selection() == nil || m.Selection().Encode() != "v1\tbranch\t/r\tfeat/zzz\tclaude\torigin/dev\n" {
+		t.Errorf("new-worktree pick = %v", m.Selection())
+	}
+}
+
+// Two bare Enters accept both placeholders: the name becomes the random suggestion
+// and the base stays empty (so worktree-setup.sh auto-detects origin's default).
+func TestNewWorktreeTwoEntersAcceptDefaults(t *testing.T) {
+	m := loadedModel(t)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // -> Branches
+	m = leader(t, m, "n")
+	wantName := m.nameInput.Placeholder // the generated random default
+	if wantName == "" {
+		t.Fatal("expected a random name placeholder")
+	}
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // accept name default
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // accept base default
+	sel := m.Selection()
+	if sel == nil {
+		t.Fatal("expected a selection after two Enters")
+	}
+	if sel.Kind != model.KindBranch || sel.RepoRoot != "/r" || sel.Ref != wantName || sel.Base != "" || sel.Tool != "claude" {
+		t.Errorf("defaults pick = %+v (want Ref=%q, empty Base)", sel, wantName)
+	}
+}
+
+// The default base placeholder reflects the repo's main checkout branch.
+func TestNewWorktreeBaseDefaultPlaceholder(t *testing.T) {
+	m := loadedModel(t)
+	m = leader(t, m, "n")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // advance to base stage
+	if m.baseInput.Placeholder != "main" {
+		t.Errorf("base placeholder = %q, want main", m.baseInput.Placeholder)
+	}
+}
+
+// ';n' is no longer confined to the Branches view — it works from any view.
+func TestNewWorktreeWorksFromPRsView(t *testing.T) {
+	m := loadedModel(t)
+	if m.view != model.ViewPRs {
+		t.Fatalf("view = %v, want PRs", m.view)
+	}
+	m = leader(t, m, "n")
+	if m.inMode != inputNewWtName {
+		t.Fatalf("inMode = %v, want inputNewWtName from the PRs view", m.inMode)
+	}
+}
+
+// esc at either stage cancels the whole flow without emitting.
+func TestNewWorktreeEscCancels(t *testing.T) {
+	m := loadedModel(t)
+	m = leader(t, m, "n")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // into base stage
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.inMode != inputNone {
+		t.Errorf("inMode = %v after esc, want inputNone", m.inMode)
+	}
+	if m.Selection() != nil {
+		t.Errorf("esc must not emit a selection, got %+v", m.Selection())
 	}
 }
 
