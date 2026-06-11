@@ -66,6 +66,19 @@ func loadedModel(t *testing.T) Model {
 	return m
 }
 
+// twoRepoModel is loadedModel with a second repo in the sidebar, for exercising the
+// scope-on-panel-focus path (sideCur can then differ from scopedIdx).
+func twoRepoModel(t *testing.T) Model {
+	t.Helper()
+	m := New()
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{
+		{Path: "/r", Name: "r"},
+		{Path: "/r2", Name: "r2"},
+	}})
+	return m
+}
+
 func TestPickPREmitsContract(t *testing.T) {
 	m := loadedModel(t)
 	if m.state[model.ViewPRs] != stateReady {
@@ -161,15 +174,46 @@ func TestSidebarLaunchesRepoRoot(t *testing.T) {
 	}
 }
 
-func TestSidebarEnterScopesNotLaunch(t *testing.T) {
+// Sidebar Enter is the fast path: launch claude on the highlighted repo's main
+// checkout (kind=repo, empty ref), the same target ';c' produces from the sidebar.
+func TestSidebarEnterLaunchesClaudeOnMain(t *testing.T) {
 	m := loadedModel(t)
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab})   // focus sidebar
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // enter scopes, does NOT emit
-	if m.Selection() != nil {
-		t.Errorf("sidebar enter should scope, not launch; got %+v", m.Selection())
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // enter launches claude on the repo root
+	sel := m.Selection()
+	if sel == nil {
+		t.Fatal("sidebar enter should launch claude on the repo root")
 	}
-	if m.focus != focusMain {
-		t.Errorf("scoping should return focus to the panel, got %v", m.focus)
+	if sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" || sel.Tool != "claude" {
+		t.Errorf("sidebar enter launch = %+v, want repo/claude on /r", sel)
+	}
+}
+
+// Moving focus into the panel (Tab or →) scopes it to the highlighted repo, so the
+// PRs/branches/worktrees the panel shows follow the sidebar selection.
+func TestEnterPanelScopesToHighlightedRepo(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyType
+	}{
+		{"tab", tea.KeyTab},
+		{"right", tea.KeyRight},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := twoRepoModel(t)
+			m = step(t, m, tea.KeyMsg{Type: tea.KeyTab}) // focus sidebar (repo 0 scoped)
+			m = step(t, m, down)                         // highlight repo 1
+			m = step(t, m, tea.KeyMsg{Type: tc.key})     // enter the panel
+			if m.focus != focusMain {
+				t.Errorf("focus = %v, want panel", m.focus)
+			}
+			if m.scopedIdx != 1 {
+				t.Errorf("scopedIdx = %d, want 1 (scoped to the highlighted repo)", m.scopedIdx)
+			}
+			if m.Selection() != nil {
+				t.Errorf("entering the panel must not launch; got %+v", m.Selection())
+			}
+		})
 	}
 }
 

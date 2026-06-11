@@ -328,6 +328,19 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 	)
 }
 
+// enterPanel moves focus into the panel, scoping it to the highlighted sidebar
+// repo first when that differs from what's loaded. Scoping is the async load
+// scopeReload kicks; when the repo is already scoped this is a cheap focus flip
+// with no reload (so repeated Tab toggles don't respawn gh/git).
+func (m *Model) enterPanel() tea.Cmd {
+	var cmd tea.Cmd
+	if m.sideCur != m.scopedIdx {
+		cmd = m.scopeReload(m.sideCur)
+	}
+	m.focus = focusMain
+	return cmd
+}
+
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" { // the one true quit; esc never kills the TUI
 		m.quit = true
@@ -353,16 +366,21 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyTab:
 		if m.focus == focusSidebar {
-			m.focus = focusMain
-		} else {
-			m.focus = focusSidebar
+			return m, m.enterPanel() // entering the panel scopes to the highlighted repo
 		}
+		m.focus = focusSidebar
 		return m, nil
 	case tea.KeyLeft:
+		if m.focus == focusSidebar {
+			return m, nil // already at the leftmost pane; nothing further left
+		}
 		m.view = m.view.Prev()
 		m.clampCursor()
 		return m, nil
 	case tea.KeyRight:
+		if m.focus == focusSidebar {
+			return m, m.enterPanel() // → from the sidebar = scope + browse the panel
+		}
 		m.view = m.view.Next()
 		m.clampCursor()
 		return m, nil
@@ -374,12 +392,12 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		m.status = ""
-		// In the sidebar, enter SCOPES the panel to the repo; in the panel it launches
-		// the selection with the default tool (claude).
+		// In the sidebar, enter is the fast path: launch claude on the highlighted
+		// repo's main checkout (kind=repo, empty ref). Scoping the panel to browse a
+		// repo's PRs/branches/worktrees happens by moving focus into it (Tab or →).
+		// In the panel, enter launches the selection with the default tool (claude).
 		if m.focus == focusSidebar {
-			cmd := m.scopeReload(m.sideCur)
-			m.focus = focusMain
-			return m, cmd
+			return m.emitRepo(model.TargetDefault)
 		}
 		return m.emit(model.TargetDefault)
 	case tea.KeyCtrlO:
@@ -1141,7 +1159,7 @@ func (m Model) renderFooter(w int) string {
 		}
 		nav := "type to filter · ↑↓ move · ←→ view · enter claude · ^O shell · "
 		if m.focus == focusSidebar {
-			nav = "type to filter · ↑↓ repo · enter scope · ^O shell · "
+			nav = "type to filter · ↑↓ repo · enter claude · → browse · ^O shell · "
 		}
 		hint = styHint.Render(clear+nav) +
 			styHeading.Render("; tools/actions") + styHint.Render(" · tab focus · ^C quit")

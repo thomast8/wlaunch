@@ -44,10 +44,11 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 |-----|--------|
 | type any text | filter the current view live |
 | `esc` | clear the filter (does **not** quit) |
-| `↑` `↓` | move within the list |
-| `←` / `→` | switch view (PRs · Branches · Worktrees) |
-| `tab` | toggle focus between the repo sidebar and the panel |
-| `enter` (sidebar) | scope the panel to that repo |
+| `↑` `↓` | move within the list (repos in the sidebar, rows in the panel) |
+| `←` / `→` (panel) | switch view (PRs · Branches · Worktrees) |
+| `→` (sidebar) | scope the panel to the highlighted repo and move into it to browse |
+| `tab` | toggle focus; moving into the panel scopes it to the highlighted repo (no reload if it's already scoped) |
+| `enter` (sidebar) | launch claude on the repo's main checkout — the fast path when you just want to jump into a repo (same target as `;c` from the sidebar) |
 | `enter` (panel) | launch the selection in claude (the default action) |
 | `Ctrl+O` (panel) | open the selection in a plain shell (Enter-modifiers like Shift/Ctrl+Enter can't be detected by terminals, so a Ctrl-chord is used; `o` = open) |
 | `;` then `c` `l` `s` `o` | open the selection (or sidebar repo) in claude / lazygit / serie / a plain shell |
