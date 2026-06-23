@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/thomast8/wlaunch/internal/data/cache"
 	"github.com/thomast8/wlaunch/internal/data/gh"
 	"github.com/thomast8/wlaunch/internal/data/git"
 	"github.com/thomast8/wlaunch/internal/data/repos"
@@ -45,6 +46,8 @@ type actionablesLoadedMsg struct {
 	gen   uint64
 	items []model.ActionItem
 }
+
+type prefetchDoneMsg struct{}
 
 // --- tea.Cmd factories (each runs in its own goroutine; the gen guard in Update
 // drops results from a superseded repo scope) ---
@@ -87,12 +90,18 @@ func loadActionableThisRepoCmd(repo string, gen uint64) tea.Cmd {
 // loadActionableAllReposCmd aggregates actionable PRs across every configured gh
 // account and maps them back to local clones. Heavier (multi-account search +
 // slug→path scan), hence the longer timeout.
-func loadActionableAllReposCmd(gen uint64) tea.Cmd {
+func loadActionableAllReposCmd(store *cache.Store, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		accounts := gh.AccountsToAggregate(ctx)
-		slugMap, _ := repos.SlugToPath(ctx) // best-effort: unmapped repos show display-only
+		slugMap, saved, ok := cache.Read[map[string]string](store, cache.KeySlugToPath())
+		if !ok || !cache.Fresh(saved, 5*time.Minute) {
+			if live, err := repos.SlugToPath(ctx); err == nil {
+				slugMap = live
+				cache.Write(store, cache.KeySlugToPath(), slugMap)
+			}
+		}
 		items, err := gh.ListActionableAllRepos(ctx, accounts, slugMap)
 		if err != nil {
 			return loadErrMsg{gen: gen, view: model.ViewActionable, err: err}
@@ -122,6 +131,59 @@ func loadWorktreesCmd(repo string, gen uint64) tea.Cmd {
 			return loadErrMsg{gen: gen, view: model.ViewWorktrees, err: err}
 		}
 		return worktreesLoadedMsg{gen: gen, worktrees: wts}
+	}
+}
+
+func prefetchRepoTabsCmd(store *cache.Store, repo string) tea.Cmd {
+	if repo == "" {
+		return nil
+	}
+	return tea.Batch(
+		prefetchPRsCacheCmd(store, repo),
+		prefetchBranchesCacheCmd(store, repo),
+		prefetchWorktreesCacheCmd(store, repo),
+	)
+}
+
+func prefetchPRsCacheCmd(store *cache.Store, repo string) tea.Cmd {
+	return func() tea.Msg {
+		if _, saved, ok := cache.Read[[]model.PR](store, cache.KeyPRs(repo)); ok && cache.Fresh(saved, cache.CloudTTL) {
+			return prefetchDoneMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if prs, err := gh.ListPRs(ctx, repo); err == nil {
+			cache.Write(store, cache.KeyPRs(repo), prs)
+		}
+		return prefetchDoneMsg{}
+	}
+}
+
+func prefetchBranchesCacheCmd(store *cache.Store, repo string) tea.Cmd {
+	return func() tea.Msg {
+		if _, saved, ok := cache.Read[[]model.Branch](store, cache.KeyBranches(repo)); ok && cache.Fresh(saved, cache.CloudTTL) {
+			return prefetchDoneMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if branches, err := git.ListBranches(ctx, repo); err == nil {
+			cache.Write(store, cache.KeyBranches(repo), branches)
+		}
+		return prefetchDoneMsg{}
+	}
+}
+
+func prefetchWorktreesCacheCmd(store *cache.Store, repo string) tea.Cmd {
+	return func() tea.Msg {
+		if _, saved, ok := cache.Read[[]model.Worktree](store, cache.KeyWorktrees(repo)); ok && cache.Fresh(saved, cache.CloudTTL) {
+			return prefetchDoneMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if worktrees, err := git.ListWorktrees(ctx, repo); err == nil {
+			cache.Write(store, cache.KeyWorktrees(repo), worktrees)
+		}
+		return prefetchDoneMsg{}
 	}
 }
 

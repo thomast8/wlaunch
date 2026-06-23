@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/thomast8/wlaunch/internal/data/cache"
 	"github.com/thomast8/wlaunch/internal/model"
 )
 
@@ -29,7 +30,8 @@ const (
 type loadState int
 
 const (
-	stateLoading loadState = iota
+	stateIdle loadState = iota
+	stateLoading
 	stateReady
 	stateError
 	stateEmpty
@@ -98,17 +100,21 @@ type Model struct {
 	state  [viewN]loadState
 	errMsg [viewN]string
 	cursor [viewN]int
+	loaded [viewN]bool
 
 	gen     uint64 // bumped on repo switch; stamps async loads to drop stale ones
 	spinner spinner.Model
+	cache   *cache.Store
+	warmed  map[string]bool
 
 	// Actionable view. Its load is repo-independent (all-repos) or scoped, so it
 	// runs on its own generation and lazily — entering the view (or --view
 	// actionable) loads it; repo switches and ;a/;r invalidate it.
-	actionItems  []model.ActionItem
-	actScope     actScope
-	actionGen    uint64
-	actionLoaded bool
+	actionItems       []model.ActionItem
+	actScope          actScope
+	actionGen         uint64
+	actionLoaded      bool
+	actionBypassCache bool
 
 	inMode    inputMode
 	filterStr string          // live type-to-filter query (always on; no mode to enter)
@@ -145,6 +151,8 @@ func New() Model {
 		focus:     focusMain,
 		view:      model.ViewPRs,
 		spinner:   sp,
+		cache:     cache.Default(),
+		warmed:    map[string]bool{},
 		nameInput: ni,
 		baseInput: bi,
 	}
@@ -161,6 +169,90 @@ func (m Model) WithAllReposScope() Model { m.actScope = scopeAllRepos; return m 
 // Selection is what main reads after Run; nil means the user cancelled.
 func (m Model) Selection() *model.Selection { return m.selection }
 
+// HydrateCache seeds the first render with the latest local snapshot. Live loads
+// still run after startup; this only avoids an empty first frame.
+func (m Model) HydrateCache() Model {
+	m.hydrateReposCache()
+	if len(m.repos) > 0 {
+		m.hydrateScopedCache(m.scopedIdx)
+	}
+	if m.view == model.ViewActionable {
+		m.hydrateActionableCache()
+	}
+	return m
+}
+
+func (m *Model) hydrateReposCache() bool {
+	rs, _, ok := cache.Read[[]model.Repo](m.cache, cache.KeyRepos())
+	if !ok || len(rs) == 0 {
+		return false
+	}
+	m.repos = rs
+	if m.scopedIdx < 0 || m.scopedIdx >= len(m.repos) {
+		m.scopedIdx = 0
+	}
+	if m.sideCur < 0 || m.sideCur >= len(m.repos) {
+		m.sideCur = m.scopedIdx
+	}
+	return true
+}
+
+func (m *Model) hydrateScopedCache(idx int) {
+	if idx < 0 || idx >= len(m.repos) {
+		return
+	}
+	repo := m.repos[idx].Path
+	if prs, _, ok := cache.Read[[]model.PR](m.cache, cache.KeyPRs(repo)); ok {
+		m.prs = prs
+		m.state[model.ViewPRs] = readyOrEmpty(len(prs))
+	}
+	if branches, _, ok := cache.Read[[]model.Branch](m.cache, cache.KeyBranches(repo)); ok {
+		m.branches = branches
+		m.state[model.ViewBranches] = readyOrEmpty(len(branches))
+	}
+	if worktrees, _, ok := cache.Read[[]model.Worktree](m.cache, cache.KeyWorktrees(repo)); ok {
+		m.worktrees = worktrees
+		m.state[model.ViewWorktrees] = readyOrEmpty(len(worktrees))
+	}
+}
+
+func (m *Model) hydrateActionableCache() bool {
+	if m.actionBypassCache {
+		return false
+	}
+	key := cache.KeyActionableAllRepos()
+	if m.actScope == scopeThisRepo {
+		repo := m.scopedPath()
+		if repo == "" {
+			return false
+		}
+		key = cache.KeyActionableRepo(repo)
+	}
+	items, _, ok := cache.Read[[]model.ActionItem](m.cache, key)
+	if !ok {
+		return false
+	}
+	m.actionItems = items
+	m.state[model.ViewActionable] = readyOrEmpty(len(items))
+	return true
+}
+
+func (m Model) hasRenderable(v model.View) bool {
+	return m.state[v] == stateReady || m.state[v] == stateEmpty
+}
+
+func (m *Model) setRefreshingStatus(v model.View) {
+	if m.view == v && m.status == "" && m.hasRenderable(v) {
+		m.status = "refreshing " + v.Label() + "..."
+	}
+}
+
+func (m *Model) clearRefreshingStatus(v model.View) {
+	if m.status == "refreshing "+v.Label()+"..." {
+		m.status = ""
+	}
+}
+
 // maybeLoadActionable kicks the Actionable load when the user is on that view and
 // its data isn't loaded for the current (scope, repo). It's a no-op otherwise, so
 // callers can fire it after any view/scope/repo change. Runs on actionGen (not the
@@ -169,13 +261,20 @@ func (m *Model) maybeLoadActionable() tea.Cmd {
 	if m.view != model.ViewActionable || m.actionLoaded {
 		return nil
 	}
+	m.hydrateActionableCache()
+	hadCached := m.hasRenderable(model.ViewActionable)
 	m.actionLoaded = true
+	m.actionBypassCache = false
 	m.actionGen++
 	m.cursor[model.ViewActionable] = 0
 	m.errMsg[model.ViewActionable] = ""
-	m.state[model.ViewActionable] = stateLoading
+	if hadCached {
+		m.setRefreshingStatus(model.ViewActionable)
+	} else {
+		m.state[model.ViewActionable] = stateLoading
+	}
 	if m.actScope == scopeAllRepos {
-		return tea.Batch(m.spinner.Tick, loadActionableAllReposCmd(m.actionGen))
+		return tea.Batch(m.spinner.Tick, loadActionableAllReposCmd(m.cache, m.actionGen))
 	}
 	repo := m.scopedPath()
 	if repo == "" {
@@ -184,6 +283,64 @@ func (m *Model) maybeLoadActionable() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(m.spinner.Tick, loadActionableThisRepoCmd(repo, m.actionGen))
+}
+
+func (m *Model) maybeLoadScopedView(v model.View) tea.Cmd {
+	if v == model.ViewActionable || int(v) < 0 || int(v) >= viewN || m.loaded[v] {
+		return nil
+	}
+	repo := m.scopedPath()
+	if repo == "" {
+		return nil
+	}
+	m.loaded[v] = true
+	if m.hasRenderable(v) {
+		m.setRefreshingStatus(v)
+	} else {
+		m.state[v] = stateLoading
+	}
+	switch v {
+	case model.ViewPRs:
+		return tea.Batch(m.spinner.Tick, loadPRsCmd(repo, m.gen))
+	case model.ViewBranches:
+		return tea.Batch(m.spinner.Tick, loadBranchesCmd(repo, m.gen))
+	case model.ViewWorktrees:
+		return tea.Batch(m.spinner.Tick, loadWorktreesCmd(repo, m.gen))
+	}
+	return nil
+}
+
+func (m *Model) maybeLoadCurrentView() tea.Cmd {
+	if m.view == model.ViewActionable {
+		return m.maybeLoadActionable()
+	}
+	return m.maybeLoadScopedView(m.view)
+}
+
+func (m *Model) prefetchScopedViews() tea.Cmd {
+	return tea.Batch(
+		m.maybeLoadScopedView(model.ViewPRs),
+		m.maybeLoadScopedView(model.ViewBranches),
+		m.maybeLoadScopedView(model.ViewWorktrees),
+	)
+}
+
+func (m *Model) prefetchFocusedRepo() tea.Cmd {
+	if m.focus != focusSidebar || m.sideCur < 0 || m.sideCur >= len(m.repos) {
+		return nil
+	}
+	repo := m.repos[m.sideCur].Path
+	if repo == "" || repo == m.scopedPath() {
+		return nil
+	}
+	if m.warmed == nil {
+		m.warmed = map[string]bool{}
+	}
+	if m.warmed[repo] {
+		return nil
+	}
+	m.warmed[repo] = true
+	return prefetchRepoTabsCmd(m.cache, repo)
 }
 
 func (m Model) Init() tea.Cmd {
@@ -199,6 +356,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reposLoadedMsg:
 		m.repos = msg.repos
+		cache.Write(m.cache, cache.KeyRepos(), m.repos)
 		if len(m.repos) == 0 {
 			for v := range m.state {
 				m.state[v] = stateEmpty
@@ -206,15 +364,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.scopedIdx, m.sideCur = 0, 0
-		c1 := m.scopeReload(0)
-		c2 := m.maybeLoadActionable() // no-op unless launched on the Actionable view
-		return m, tea.Batch(c1, c2)
+		return m, m.scopeReload(0)
 
 	case prsLoadedMsg:
 		if msg.gen != m.gen {
 			return m, nil
 		}
 		m.prs = msg.prs
+		cache.Write(m.cache, cache.KeyPRs(m.scopedPath()), m.prs)
+		m.clearRefreshingStatus(model.ViewPRs)
 		m.state[model.ViewPRs] = readyOrEmpty(len(m.prs))
 		return m, nil
 
@@ -223,6 +381,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.branches = msg.branches
+		cache.Write(m.cache, cache.KeyBranches(m.scopedPath()), m.branches)
+		m.clearRefreshingStatus(model.ViewBranches)
 		m.state[model.ViewBranches] = readyOrEmpty(len(m.branches))
 		return m, nil
 
@@ -232,6 +392,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.branches != nil { // nil = re-list failed; keep the old list
 			m.branches = msg.branches
+			cache.Write(m.cache, cache.KeyBranches(m.scopedPath()), m.branches)
 			m.state[model.ViewBranches] = readyOrEmpty(len(m.branches))
 			if m.view == model.ViewBranches {
 				m.clampCursor()
@@ -245,6 +406,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.worktrees = msg.worktrees
+		cache.Write(m.cache, cache.KeyWorktrees(m.scopedPath()), m.worktrees)
+		m.clearRefreshingStatus(model.ViewWorktrees)
 		m.state[model.ViewWorktrees] = readyOrEmpty(len(m.worktrees))
 		if m.view == model.ViewWorktrees {
 			m.clampCursor()
@@ -273,6 +436,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.worktrees = kept
+			cache.Write(m.cache, cache.KeyWorktrees(m.scopedPath()), m.worktrees)
 			m.state[model.ViewWorktrees] = readyOrEmpty(len(m.worktrees))
 			if m.view == model.ViewWorktrees {
 				m.clampCursor()
@@ -295,6 +459,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err == nil {
 			m.removeBranches(map[string]bool{msg.name: true})
+			cache.Write(m.cache, cache.KeyBranches(m.scopedPath()), m.branches)
 			m.status = "✓ deleted " + msg.name
 			return m, nil
 		}
@@ -319,6 +484,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				gone[n] = true
 			}
 			m.removeBranches(gone)
+			cache.Write(m.cache, cache.KeyBranches(m.scopedPath()), m.branches)
 		}
 		m.status = cleanStatus(len(msg.removed), msg.skipped)
 		return m, nil
@@ -328,6 +494,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.actionItems = msg.items
+		if m.actScope == scopeAllRepos {
+			cache.Write(m.cache, cache.KeyActionableAllRepos(), m.actionItems)
+		} else {
+			cache.Write(m.cache, cache.KeyActionableRepo(m.scopedPath()), m.actionItems)
+		}
+		m.clearRefreshingStatus(model.ViewActionable)
 		m.state[model.ViewActionable] = readyOrEmpty(len(m.actionItems))
 		if m.view == model.ViewActionable {
 			m.clampCursor()
@@ -341,6 +513,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			wantGen = m.actionGen
 		}
 		if msg.gen != wantGen {
+			return m, nil
+		}
+		if m.hasRenderable(msg.view) {
+			m.status = friendly(msg.err)
 			return m, nil
 		}
 		m.state[msg.view] = stateError
@@ -390,16 +566,12 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 	if m.actScope == scopeThisRepo {
 		m.actionLoaded = false // this-repo actionable data is now stale; all-repos is repo-independent
 	}
-	m.state[model.ViewPRs] = stateLoading
-	m.state[model.ViewBranches] = stateLoading
-	m.state[model.ViewWorktrees] = stateLoading
-	repo := m.repos[idx].Path
-	return tea.Batch(
-		m.spinner.Tick,
-		loadPRsCmd(repo, m.gen),
-		loadBranchesCmd(repo, m.gen),
-		loadWorktreesCmd(repo, m.gen),
-	)
+	m.state[model.ViewPRs] = stateIdle
+	m.state[model.ViewBranches] = stateIdle
+	m.state[model.ViewWorktrees] = stateIdle
+	m.loaded = [viewN]bool{}
+	m.hydrateScopedCache(idx)
+	return tea.Batch(m.prefetchScopedViews(), m.maybeLoadCurrentView())
 }
 
 // enterPanel moves focus into the panel, scoping it to the highlighted sidebar
@@ -450,7 +622,7 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.view = m.view.Prev()
 		m.clampCursor()
-		cmd := m.maybeLoadActionable() // lazily load if we arrived on Actionable
+		cmd := m.maybeLoadCurrentView()
 		return m, cmd
 	case tea.KeyRight:
 		if m.focus == focusSidebar {
@@ -458,14 +630,14 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.view = m.view.Next()
 		m.clampCursor()
-		cmd := m.maybeLoadActionable()
+		cmd := m.maybeLoadCurrentView()
 		return m, cmd
 	case tea.KeyUp:
 		m.move(-1)
-		return m, nil
+		return m, m.prefetchFocusedRepo()
 	case tea.KeyDown:
 		m.move(1)
-		return m, nil
+		return m, m.prefetchFocusedRepo()
 	case tea.KeyEnter:
 		m.status = ""
 		// In the sidebar, enter is the fast path: launch claude on the highlighted
@@ -536,6 +708,8 @@ func (m Model) handleLeader(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.actScope = scopeAllRepos
 			}
 			m.actionLoaded = false
+			m.actionItems = nil
+			m.state[model.ViewActionable] = stateLoading
 			m.filterStr = "" // reason keywords differ across scopes; start clean
 			cmd := m.maybeLoadActionable()
 			return m, cmd
@@ -543,6 +717,9 @@ func (m Model) handleLeader(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if m.focus == focusMain && m.view == model.ViewActionable {
 			m.actionLoaded = false
+			m.actionBypassCache = true
+			m.actionItems = nil
+			m.state[model.ViewActionable] = stateLoading
 			cmd := m.maybeLoadActionable()
 			return m, cmd
 		}
@@ -1335,6 +1512,8 @@ func (m Model) renderPanel(w, h int) string {
 
 	var body string
 	switch m.state[m.view] {
+	case stateIdle:
+		body = styMeta.Render(m.spinner.View() + " Loading " + m.view.Label() + "…")
 	case stateLoading:
 		body = styMeta.Render(m.spinner.View() + " Loading " + m.view.Label() + "…")
 	case stateError:

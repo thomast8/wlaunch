@@ -55,6 +55,7 @@ func main() {
 	if scopeFlag == "all" {
 		m = m.WithAllReposScope()
 	}
+	m = m.HydrateCache()
 
 	// Drive the UI from the controlling terminal so stdout stays a clean data
 	// channel: render → stderr, input ← /dev/tty, result → stdout.

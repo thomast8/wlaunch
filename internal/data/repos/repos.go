@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/thomast8/wlaunch/internal/data"
 	"github.com/thomast8/wlaunch/internal/model"
@@ -125,11 +126,24 @@ func SlugToPath(ctx context.Context) (map[string]string, error) {
 		return nil, err
 	}
 	m := make(map[string]string, len(rs))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
 	for _, r := range rs {
-		if slug, e := OriginSlug(ctx, r.Path); e == nil && slug != "" {
-			m[strings.ToLower(slug)] = r.Path
-		}
+		r := r
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if slug, e := OriginSlug(ctx, r.Path); e == nil && slug != "" {
+				mu.Lock()
+				m[strings.ToLower(slug)] = r.Path
+				mu.Unlock()
+			}
+		}()
 	}
+	wg.Wait()
 	return m, nil
 }
 

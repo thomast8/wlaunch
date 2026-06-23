@@ -294,27 +294,51 @@ func ListActionableForRepo(ctx context.Context, repo string) ([]model.ActionItem
 	if err != nil {
 		return nil, err
 	}
-	me, err := loginFor(ctx, env)
-	if err != nil {
-		return nil, err
+	me := accountFor(ctx, repo)
+	if me == "" {
+		me, err = loginFor(ctx, env)
+		if err != nil {
+			return nil, err
+		}
 	}
-	b, err := data.RunEnv(ctx, repo, env, "gh", "pr", "list",
-		"--limit", "50",
-		"--json", "number,title,headRefName,author,additions,deletions,isDraft,reviewDecision,mergeable,reviewRequests,createdAt,updatedAt,statusCheckRollup")
-	if err != nil {
-		return nil, err
+	type fullResult struct {
+		prs []ghPRFull
+		err error
 	}
-	full, err := parsePRsFull(b)
-	if err != nil {
-		return nil, err
+	type metaResult struct {
+		threads map[int]int
+		turns   map[int]prTurnInfo
 	}
-	// Thread counts are best-effort: a GraphQL hiccup must not blank the view.
-	var threads map[int]int
-	var turns map[int]prTurnInfo
-	if slug, e := repos.OriginSlug(ctx, repo); e == nil && slug != "" {
-		threads, _ = fetchUnresolvedThreads(ctx, env, slug)
-		turns, _ = fetchTurnInfo(ctx, env, slug, me)
+	fullCh := make(chan fullResult, 1)
+	metaCh := make(chan metaResult, 1)
+	go func() {
+		b, err := data.RunEnv(ctx, repo, env, "gh", "pr", "list",
+			"--limit", "50",
+			"--json", "number,title,headRefName,author,additions,deletions,isDraft,reviewDecision,mergeable,reviewRequests,createdAt,updatedAt,statusCheckRollup")
+		if err != nil {
+			fullCh <- fullResult{err: err}
+			return
+		}
+		prs, err := parsePRsFull(b)
+		fullCh <- fullResult{prs: prs, err: err}
+	}()
+	go func() {
+		// Thread/turn metadata is best-effort: a GraphQL hiccup must not blank the view.
+		if slug, e := repos.OriginSlug(ctx, repo); e == nil && slug != "" {
+			threads, turns, _ := fetchRepoPRMeta(ctx, env, slug, me)
+			metaCh <- metaResult{threads: threads, turns: turns}
+			return
+		}
+		metaCh <- metaResult{}
+	}()
+	fullRes := <-fullCh
+	if fullRes.err != nil {
+		return nil, fullRes.err
 	}
+	metaRes := <-metaCh
+	full := fullRes.prs
+	threads := metaRes.threads
+	turns := metaRes.turns
 	repoName := filepath.Base(repo)
 	var mine, awaiting []model.RawActionPR
 	for _, p := range full {
@@ -355,18 +379,39 @@ func AccountsToAggregate(ctx context.Context) []Account {
 			continue
 		}
 		seen[login] = true
-		tok, err := data.Run(ctx, "", "gh", "auth", "token", "-u", login)
-		if err != nil {
-			continue
-		}
-		if t := strings.TrimSpace(string(tok)); t != "" {
-			accts = append(accts, Account{Login: login, Token: t})
+		accts = append(accts, Account{Login: login})
+	}
+	type tokenResult struct {
+		idx   int
+		token string
+	}
+	ch := make(chan tokenResult, len(accts))
+	for i, acct := range accts {
+		go func() {
+			tok, err := data.Run(ctx, "", "gh", "auth", "token", "-u", acct.Login)
+			if err != nil {
+				ch <- tokenResult{idx: i}
+				return
+			}
+			ch <- tokenResult{idx: i, token: strings.TrimSpace(string(tok))}
+		}()
+	}
+	resolved := make([]Account, 0, len(accts))
+	tokens := make([]string, len(accts))
+	for range accts {
+		res := <-ch
+		tokens[res.idx] = res.token
+	}
+	for i, acct := range accts {
+		if tokens[i] != "" {
+			acct.Token = tokens[i]
+			resolved = append(resolved, acct)
 		}
 	}
-	if len(accts) == 0 {
+	if len(resolved) == 0 {
 		return []Account{{}}
 	}
-	return accts
+	return resolved
 }
 
 // ListActionableAllRepos aggregates the cross-repo actionable set: for each
@@ -404,37 +449,54 @@ func ListActionableAllRepos(ctx context.Context, accounts []Account, slugToPath 
 		})
 	}
 	var firstErr error
-	queries := []struct {
+	type querySpec struct {
 		flag, val string
-		dst       *[]model.RawActionPR
-	}{
-		{"--author", "@me", &mine},
-		{"--review-requested", "@me", &awaiting},
+		mine      bool
 	}
+	type queryResult struct {
+		mine bool
+		prs  []ghSearchPR
+		err  error
+	}
+	queries := []querySpec{
+		{flag: "--author", val: "@me", mine: true},
+		{flag: "--review-requested", val: "@me"},
+	}
+	ch := make(chan queryResult, len(accounts)*len(queries))
 	for _, acct := range accounts {
 		var env []string
 		if acct.Token != "" {
 			env = []string{"GH_TOKEN=" + acct.Token}
 		}
 		for _, q := range queries {
-			b, err := data.RunEnv(ctx, "", env, "gh", "search", "prs",
-				"--state", "open", q.flag, q.val, "--limit", "50",
-				"--json", "number,title,repository,author,isDraft,createdAt,updatedAt")
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
+			env := env
+			q := q
+			go func() {
+				b, err := data.RunEnv(ctx, "", env, "gh", "search", "prs",
+					"--state", "open", q.flag, q.val, "--limit", "50",
+					"--json", "number,title,repository,author,isDraft,createdAt,updatedAt")
+				if err != nil {
+					ch <- queryResult{mine: q.mine, err: err}
+					return
 				}
-				continue
+				prs, err := parseSearchPRs(b)
+				ch <- queryResult{mine: q.mine, prs: prs, err: err}
+			}()
+		}
+	}
+	for i := 0; i < len(accounts)*len(queries); i++ {
+		res := <-ch
+		if res.err != nil {
+			if firstErr == nil {
+				firstErr = res.err
 			}
-			prs, err := parseSearchPRs(b)
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			for _, sp := range prs {
-				add(q.dst, sp)
+			continue
+		}
+		for _, sp := range res.prs {
+			if res.mine {
+				add(&mine, sp)
+			} else {
+				add(&awaiting, sp)
 			}
 		}
 	}
@@ -467,6 +529,28 @@ func fetchUnresolvedThreads(ctx context.Context, env []string, slug string) (map
 		return nil, err
 	}
 	return parseThreads(b)
+}
+
+func fetchRepoPRMeta(ctx context.Context, env []string, slug, me string) (map[int]int, map[int]prTurnInfo, error) {
+	owner, name, ok := splitSlug(slug)
+	if !ok {
+		return nil, nil, fmt.Errorf("unparseable repo slug %q", slug)
+	}
+	const q = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:50){nodes{number author{login} reviewThreads(first:100){nodes{isResolved}} reviews(last:20){nodes{author{login} state submittedAt}} comments(last:20){nodes{author{login} createdAt}} commits(last:1){nodes{commit{authoredDate committedDate}}}}}}}`
+	b, err := data.RunEnv(ctx, "", env, "gh", "api", "graphql",
+		"-f", "query="+q, "-F", "owner="+owner, "-F", "name="+name)
+	if err != nil {
+		return nil, nil, err
+	}
+	threads, err := parseThreads(b)
+	if err != nil {
+		return nil, nil, err
+	}
+	turns, err := parseTurnInfo(b, me)
+	if err != nil {
+		return nil, nil, err
+	}
+	return threads, turns, nil
 }
 
 func fetchTurnInfo(ctx context.Context, env []string, slug, me string) (map[int]prTurnInfo, error) {

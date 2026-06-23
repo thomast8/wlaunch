@@ -16,6 +16,7 @@ import (
 func realisticModel(t *testing.T, w, h int) Model {
 	t.Helper()
 	m := New()
+	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: w, Height: h})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{
 		{Path: "/r/PolicyAsCode", Name: "PolicyAsCode"},

@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/thomast8/wlaunch/internal/data/cache"
 	"github.com/thomast8/wlaunch/internal/model"
 )
 
@@ -68,6 +69,25 @@ func TestActionableScopeToggle(t *testing.T) {
 	}
 	if m.state[model.ViewActionable] != stateLoading {
 		t.Error("toggling scope should kick a reload")
+	}
+}
+
+func TestActionableManualRefreshBypassesCache(t *testing.T) {
+	t.Setenv("WLAUNCH_CACHE_DIR", t.TempDir())
+	store := cache.Default()
+	cache.Write(store, cache.KeyRepos(), []model.Repo{{Path: "/r", Name: "r"}})
+	cache.Write(store, cache.KeyActionableAllRepos(), []model.ActionItem{{RepoRoot: "/r", RepoName: "r", Number: 7, Title: "cached", Marker: "◆", Summary: "review"}})
+
+	m := New().WithInitialView(model.ViewActionable).WithAllReposScope().HydrateCache()
+	if m.state[model.ViewActionable] != stateReady || len(m.actionItems) != 1 {
+		t.Fatalf("expected cached Actionable item, state=%v items=%+v", m.state[model.ViewActionable], m.actionItems)
+	}
+	m = leader(t, m, "r")
+	if m.state[model.ViewActionable] != stateLoading {
+		t.Fatalf("manual refresh should bypass cache and show loading, got state=%v", m.state[model.ViewActionable])
+	}
+	if len(m.actionItems) != 0 {
+		t.Fatalf("manual refresh should clear cached items, got %+v", m.actionItems)
 	}
 }
 
