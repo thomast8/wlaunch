@@ -9,6 +9,7 @@ func TestSelectionEncode(t *testing.T) {
 		want string
 	}{
 		{"pr", Selection{Kind: KindPR, RepoRoot: "/r", Ref: "289", Tool: "claude"}, "v1\tpr\t/r\t289\tclaude\t\n"},
+		{"pr-codex", Selection{Kind: KindPR, RepoRoot: "/r", Ref: "289", Tool: "codex"}, "v1\tpr\t/r\t289\tcodex\t\n"},
 		{"branch", Selection{Kind: KindBranch, RepoRoot: "/r", Ref: "feat/x", Tool: "lazygit"}, "v1\tbranch\t/r\tfeat/x\tlazygit\t\n"},
 		{"branch-with-base", Selection{Kind: KindBranch, RepoRoot: "/r", Ref: "feat/x", Tool: "claude", Base: "origin/dev"}, "v1\tbranch\t/r\tfeat/x\tclaude\torigin/dev\n"},
 		{"worktree", Selection{Kind: KindWorktree, RepoRoot: "/r", Ref: "/wt/pr289", Tool: "serie"}, "v1\tworktree\t/r\t/wt/pr289\tserie\t\n"},
@@ -27,6 +28,7 @@ func TestTargetTool(t *testing.T) {
 	cases := map[Target]string{
 		TargetDefault: "claude",
 		TargetClaude:  "claude",
+		TargetCodex:   "codex",
 		TargetLazygit: "lazygit",
 		TargetSerie:   "serie",
 		TargetShell:   "shell",
@@ -39,11 +41,15 @@ func TestTargetTool(t *testing.T) {
 }
 
 func TestViewCycleWraps(t *testing.T) {
-	if got := ViewPRs.Prev(); got != ViewWorktrees {
-		t.Errorf("ViewPRs.Prev() = %v, want ViewWorktrees", got)
+	// Actionable is the last view, so the cycle wraps PRs ↔ Actionable.
+	if got := ViewPRs.Prev(); got != ViewActionable {
+		t.Errorf("ViewPRs.Prev() = %v, want ViewActionable", got)
 	}
-	if got := ViewWorktrees.Next(); got != ViewPRs {
-		t.Errorf("ViewWorktrees.Next() = %v, want ViewPRs", got)
+	if got := ViewActionable.Next(); got != ViewPRs {
+		t.Errorf("ViewActionable.Next() = %v, want ViewPRs", got)
+	}
+	if got := ViewWorktrees.Next(); got != ViewActionable {
+		t.Errorf("ViewWorktrees.Next() = %v, want ViewActionable", got)
 	}
 	if got := ViewPRs.Next(); got != ViewBranches {
 		t.Errorf("ViewPRs.Next() = %v, want ViewBranches", got)

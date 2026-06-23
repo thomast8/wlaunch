@@ -12,6 +12,7 @@ const (
 	ViewPRs View = iota
 	ViewBranches
 	ViewWorktrees
+	ViewActionable
 	viewCount
 )
 
@@ -24,6 +25,8 @@ func (v View) Label() string {
 		return "Branches"
 	case ViewWorktrees:
 		return "Worktrees"
+	case ViewActionable:
+		return "Actionable"
 	default:
 		return "?"
 	}
@@ -39,6 +42,7 @@ type Target int
 const (
 	TargetDefault Target = iota
 	TargetClaude
+	TargetCodex
 	TargetLazygit
 	TargetSerie
 	TargetShell
@@ -48,6 +52,8 @@ const (
 // The default open action maps to claude (the dominant use).
 func (t Target) Tool() string {
 	switch t {
+	case TargetCodex:
+		return "codex"
 	case TargetLazygit:
 		return "lazygit"
 	case TargetSerie:

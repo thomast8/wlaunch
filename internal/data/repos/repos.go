@@ -80,6 +80,59 @@ func scanRepos(dir string) []string {
 	return out
 }
 
+// NormalizeSlug reduces a git remote URL to its owner/name slug (no host, no
+// .git), so gh search results (which carry owner/name) can be matched to local
+// clones. Handles scp-like (git@host:owner/name.git), https/ssh URLs, and a
+// user@ prefix; returns "" when it can't extract a slug.
+func NormalizeSlug(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimSuffix(s, ".git")
+	if s == "" {
+		return ""
+	}
+	if i := strings.Index(s, "://"); i >= 0 { // scheme://[user@]host/owner/name
+		rest := s[i+3:]
+		if at := strings.Index(rest, "@"); at >= 0 {
+			rest = rest[at+1:]
+		}
+		if k := strings.Index(rest, "/"); k >= 0 {
+			return strings.TrimPrefix(rest[k:], "/")
+		}
+		return ""
+	}
+	if c := strings.LastIndex(s, ":"); c >= 0 { // scp-like git@host:owner/name
+		return s[c+1:]
+	}
+	return s
+}
+
+// OriginSlug resolves a repo's origin remote to its owner/name slug, or "" when
+// the repo has no origin.
+func OriginSlug(ctx context.Context, path string) (string, error) {
+	b, err := data.Run(ctx, path, "git", "config", "--get", "remote.origin.url")
+	if err != nil {
+		return "", err
+	}
+	return NormalizeSlug(string(b)), nil
+}
+
+// SlugToPath maps each candidate repo's lowercased origin slug to its local main
+// checkout, so the cross-repo actionable view can turn a gh search hit
+// (owner/name) into a path the wl wrapper can cd into.
+func SlugToPath(ctx context.Context) (map[string]string, error) {
+	rs, err := List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(rs))
+	for _, r := range rs {
+		if slug, e := OriginSlug(ctx, r.Path); e == nil && slug != "" {
+			m[strings.ToLower(slug)] = r.Path
+		}
+	}
+	return m, nil
+}
+
 // List returns the scoped-repo candidates, default/most-recent first, deduped and
 // filtered to directories that still exist. repo-default.sh runs with the process
 // cwd so "current repo if in one" resolves correctly.

@@ -1,5 +1,5 @@
 // Package ui is the Bubble Tea front end for wlaunch: a persistent repo sidebar
-// plus a main panel of four views (PRs, branches, worktrees, recent repos) cycled
+// plus a main panel of four views (PRs, branches, worktrees, actionable) cycled
 // with ←/→. It renders to stderr and emits a model.Selection on a launch pick;
 // main reads Selection() and prints its Encode() to stdout.
 package ui
@@ -7,6 +7,7 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,7 +57,17 @@ const (
 	confirmForceRemoveWt     // dirty worktree skipped: force-remove (discards changes)?
 )
 
-const viewN = 3 // PRs, Branches, Worktrees (repos live in the sidebar, not a view)
+const viewN = 4 // PRs, Branches, Worktrees, Actionable (repos live in the sidebar, not a view)
+
+// actScope toggles the Actionable view between the scoped repo and all repos. The
+// zero value is this-repo, so the ←/→ launcher cycle defaults to the scoped repo;
+// the dedicated tab opts into all-repos via WithAllReposScope.
+type actScope int
+
+const (
+	scopeThisRepo actScope = iota
+	scopeAllRepos
+)
 
 // rowData is the per-view uniform row: how to render it, how to filter it, and
 // what Selection it produces when launched.
@@ -90,6 +101,14 @@ type Model struct {
 
 	gen     uint64 // bumped on repo switch; stamps async loads to drop stale ones
 	spinner spinner.Model
+
+	// Actionable view. Its load is repo-independent (all-repos) or scoped, so it
+	// runs on its own generation and lazily — entering the view (or --view
+	// actionable) loads it; repo switches and ;a/;r invalidate it.
+	actionItems  []model.ActionItem
+	actScope     actScope
+	actionGen    uint64
+	actionLoaded bool
 
 	inMode    inputMode
 	filterStr string          // live type-to-filter query (always on; no mode to enter)
@@ -131,8 +150,41 @@ func New() Model {
 	}
 }
 
+// WithInitialView opens the launcher on a specific view (e.g. the Actionable
+// tab). Used by the --view flag.
+func (m Model) WithInitialView(v model.View) Model { m.view = v; return m }
+
+// WithAllReposScope makes the Actionable view default to all-repos rather than
+// the scoped repo. Used by the --scope flag / the dedicated tab.
+func (m Model) WithAllReposScope() Model { m.actScope = scopeAllRepos; return m }
+
 // Selection is what main reads after Run; nil means the user cancelled.
 func (m Model) Selection() *model.Selection { return m.selection }
+
+// maybeLoadActionable kicks the Actionable load when the user is on that view and
+// its data isn't loaded for the current (scope, repo). It's a no-op otherwise, so
+// callers can fire it after any view/scope/repo change. Runs on actionGen (not the
+// repo gen) so repo switches don't drop an in-flight all-repos fan-out.
+func (m *Model) maybeLoadActionable() tea.Cmd {
+	if m.view != model.ViewActionable || m.actionLoaded {
+		return nil
+	}
+	m.actionLoaded = true
+	m.actionGen++
+	m.cursor[model.ViewActionable] = 0
+	m.errMsg[model.ViewActionable] = ""
+	m.state[model.ViewActionable] = stateLoading
+	if m.actScope == scopeAllRepos {
+		return tea.Batch(m.spinner.Tick, loadActionableAllReposCmd(m.actionGen))
+	}
+	repo := m.scopedPath()
+	if repo == "" {
+		m.state[model.ViewActionable] = stateError
+		m.errMsg[model.ViewActionable] = "no repo to scope to"
+		return nil
+	}
+	return tea.Batch(m.spinner.Tick, loadActionableThisRepoCmd(repo, m.actionGen))
+}
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, loadReposCmd())
@@ -154,7 +206,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.scopedIdx, m.sideCur = 0, 0
-		return m, m.scopeReload(0)
+		c1 := m.scopeReload(0)
+		c2 := m.maybeLoadActionable() // no-op unless launched on the Actionable view
+		return m, tea.Batch(c1, c2)
 
 	case prsLoadedMsg:
 		if msg.gen != m.gen {
@@ -269,8 +323,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = cleanStatus(len(msg.removed), msg.skipped)
 		return m, nil
 
+	case actionablesLoadedMsg:
+		if msg.gen != m.actionGen {
+			return m, nil
+		}
+		m.actionItems = msg.items
+		m.state[model.ViewActionable] = readyOrEmpty(len(m.actionItems))
+		if m.view == model.ViewActionable {
+			m.clampCursor()
+		}
+		return m, nil
+
 	case loadErrMsg:
-		if msg.gen != m.gen {
+		// The Actionable view loads on actionGen; everything else on the repo gen.
+		wantGen := m.gen
+		if msg.view == model.ViewActionable {
+			wantGen = m.actionGen
+		}
+		if msg.gen != wantGen {
 			return m, nil
 		}
 		m.state[msg.view] = stateError
@@ -301,7 +371,8 @@ func readyOrEmpty(n int) loadState {
 func (m Model) anyLoading() bool {
 	return m.state[model.ViewPRs] == stateLoading ||
 		m.state[model.ViewBranches] == stateLoading ||
-		m.state[model.ViewWorktrees] == stateLoading
+		m.state[model.ViewWorktrees] == stateLoading ||
+		m.state[model.ViewActionable] == stateLoading
 }
 
 // scopeReload points the views at repos[idx], invalidating in-flight loads via a
@@ -316,6 +387,9 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 	m.delBranch, m.cleanTargets = "", nil                      // drop any pending branch delete
 	m.autoDeleteBranch, m.dirtyFiles = "", 0                   // drop any carried delete intent
 	m.awaiting = false                                         // drop a dangling leader
+	if m.actScope == scopeThisRepo {
+		m.actionLoaded = false // this-repo actionable data is now stale; all-repos is repo-independent
+	}
 	m.state[model.ViewPRs] = stateLoading
 	m.state[model.ViewBranches] = stateLoading
 	m.state[model.ViewWorktrees] = stateLoading
@@ -338,7 +412,7 @@ func (m *Model) enterPanel() tea.Cmd {
 		cmd = m.scopeReload(m.sideCur)
 	}
 	m.focus = focusMain
-	return cmd
+	return tea.Batch(cmd, m.maybeLoadActionable()) // reload Actionable if we landed back on it
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -376,14 +450,16 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.view = m.view.Prev()
 		m.clampCursor()
-		return m, nil
+		cmd := m.maybeLoadActionable() // lazily load if we arrived on Actionable
+		return m, cmd
 	case tea.KeyRight:
 		if m.focus == focusSidebar {
 			return m, m.enterPanel() // → from the sidebar = scope + browse the panel
 		}
 		m.view = m.view.Next()
 		m.clampCursor()
-		return m, nil
+		cmd := m.maybeLoadActionable()
+		return m, cmd
 	case tea.KeyUp:
 		m.move(-1)
 		return m, nil
@@ -442,6 +518,8 @@ func (m Model) handleLeader(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "c":
 		return m.launch(model.TargetClaude)
+	case "x":
+		return m.launch(model.TargetCodex)
 	case "l":
 		return m.launch(model.TargetLazygit)
 	case "s":
@@ -450,6 +528,24 @@ func (m Model) handleLeader(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.launch(model.TargetShell) // "open" = a plain terminal in the worktree
 	case "n":
 		return m.startNewWorktree()
+	case "a":
+		if m.focus == focusMain && m.view == model.ViewActionable {
+			if m.actScope == scopeAllRepos {
+				m.actScope = scopeThisRepo
+			} else {
+				m.actScope = scopeAllRepos
+			}
+			m.actionLoaded = false
+			m.filterStr = "" // reason keywords differ across scopes; start clean
+			cmd := m.maybeLoadActionable()
+			return m, cmd
+		}
+	case "r":
+		if m.focus == focusMain && m.view == model.ViewActionable {
+			m.actionLoaded = false
+			cmd := m.maybeLoadActionable()
+			return m, cmd
+		}
 	case "f":
 		if m.focus == focusMain && m.view == model.ViewBranches {
 			if b := m.selectedBranch(); b != nil {
@@ -967,6 +1063,12 @@ func (m Model) emit(t model.Target) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	rd := vis[c]
+	if rd.repoRoot == "" {
+		// A cross-repo actionable item whose repo isn't cloned locally: nothing to
+		// cd into, so it's display-only rather than launchable.
+		m.status = "#" + rd.ref + " isn't cloned locally — open it with gh pr view --web"
+		return m, nil
+	}
 	m.selection = &model.Selection{Kind: rd.kind, RepoRoot: rd.repoRoot, Ref: rd.ref, Tool: t.Tool()}
 	return m, tea.Quit
 }
@@ -1032,6 +1134,20 @@ func (m Model) rows(v model.View) []rowData {
 			})
 		}
 		return out
+	case model.ViewActionable:
+		showRepo := m.actScope == scopeAllRepos
+		out := make([]rowData, 0, len(m.actionItems))
+		for _, it := range m.actionItems {
+			it := it
+			out = append(out, rowData{
+				// Each item carries its own repoRoot (it may span repos), so the
+				// existing KindPR contract resolves cross-repo opens unchanged.
+				kind: model.KindPR, repoRoot: it.RepoRoot, ref: strconv.Itoa(it.Number),
+				filter: it.FilterText(),
+				render: func(w int, sel, foc bool) string { return renderActionableRow(it, showRepo, w, sel, foc) },
+			})
+		}
+		return out
 	}
 	return nil
 }
@@ -1091,7 +1207,8 @@ func (m Model) renderHeader(w int) string {
 	}
 	left := tab("PRs", m.view == model.ViewPRs) + " " +
 		tab("Branches", m.view == model.ViewBranches) + " " +
-		tab("Worktrees", m.view == model.ViewWorktrees)
+		tab("Worktrees", m.view == model.ViewWorktrees) + " " +
+		tab("Actionable", m.view == model.ViewActionable)
 	if q := strings.TrimSpace(m.filterStr); q != "" {
 		right := styMeta.Render("🔎 " + q)
 		gap := w - lipgloss.Width(left) - lipgloss.Width(right)
@@ -1139,11 +1256,13 @@ func (m Model) renderFooter(w int) string {
 		hint = styErr.Render(verb+" with "+what+" — DISCARD them?  ") +
 			styHeading.Render("y") + styHint.Render(" discard · ") + styHeading.Render("n") + styHint.Render(" keep")
 	case m.awaiting: // leader pressed: show the tool/action menu it unlocks
-		menu := "c claude · l lazygit · s serie · o shell · n new"
+		menu := "c claude · x codex · l lazygit · s serie · o shell · n new"
 		if m.focus == focusMain && m.view == model.ViewBranches {
 			menu += " · f fetch · p pull · d del · D clean"
 		} else if m.focus == focusMain && m.view == model.ViewWorktrees {
 			menu += " · d remove · D all"
+		} else if m.focus == focusMain && m.view == model.ViewActionable {
+			menu += " · a scope · r refresh"
 		}
 		hint = styHeading.Render("; ") + styHint.Render(menu)
 	case m.status != "":
@@ -1206,6 +1325,13 @@ func (m Model) renderPanel(w, h int) string {
 	if m.focus == focusMain {
 		heading = "▸ " + m.view.Label()
 	}
+	if m.view == model.ViewActionable {
+		if m.actScope == scopeAllRepos {
+			heading += styMeta.Render("  · all repos")
+		} else {
+			heading += styMeta.Render("  · this repo")
+		}
+	}
 
 	var body string
 	switch m.state[m.view] {
@@ -1247,6 +1373,8 @@ func emptyMsg(v model.View) string {
 		return "No local branches."
 	case model.ViewWorktrees:
 		return "No linked worktrees yet."
+	case model.ViewActionable:
+		return "Nothing needs you right now. ←→ for PRs, branches & worktrees."
 	}
 	return ""
 }
@@ -1349,6 +1477,51 @@ func renderWorktreeRow(wt model.Worktree, w int, selected, focused bool) string 
 		return rowStyle(focused).Render("▸ " + nameCol + " " + branchCol + " " + headCol + " " + badgeCol)
 	}
 	return "  " + styText.Render(nameCol) + " " + styMeta.Render(branchCol) + " " + styMeta.Render(headCol) + " " + styMeta.Render(badgeCol)
+}
+
+// markerStyle colors an actionable row's marker/summary by severity: red for
+// blocked/changes, accent for review/threads, dim for ready/stale/waiting.
+func markerStyle(it model.ActionItem) lipgloss.Style {
+	switch it.Marker {
+	case "✗", "⚠":
+		return styErr
+	case "◆":
+		return styNum
+	default: // "✓", "·"
+		return styMeta
+	}
+}
+
+// renderActionableRow lays out: marker · #num · summary · [repo] · title. In
+// all-repos scope a repo column is shown so cross-repo items are distinguishable.
+func renderActionableRow(it model.ActionItem, showRepo bool, w int, selected, focused bool) string {
+	markerCol := padTrunc(it.Marker, 2)
+	numCol := padTrunc(fmt.Sprintf("#%d", it.Number), 6)
+	avail := w - 2 - 2 - 6 // leading 2 + marker 2 + num 6
+	if avail < 20 {
+		avail = 20
+	}
+	sumW := clamp(avail*24/100, 8, 16)
+	repoW := 0
+	if showRepo {
+		repoW = clamp(avail*26/100, 8, 22)
+	}
+	titleW := avail - sumW - repoW - 2 // inter-column spaces
+	if titleW < 6 {
+		titleW = 6
+	}
+	sumCol := padTrunc(it.Summary, sumW)
+	titleCol := padTrunc(it.Title, titleW)
+	repoCol := ""
+	if showRepo {
+		repoCol = padTrunc(it.RepoName, repoW) + " "
+	}
+	if selected {
+		return rowStyle(focused).Render("▸ " + markerCol + numCol + sumCol + " " + repoCol + titleCol)
+	}
+	ms := markerStyle(it)
+	return "  " + ms.Render(markerCol) + styNum.Render(numCol) + ms.Render(sumCol) + " " +
+		styMeta.Render(repoCol) + styText.Render(titleCol)
 }
 
 func relTime(unix int64) string {

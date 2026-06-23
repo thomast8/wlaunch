@@ -38,6 +38,14 @@ type loadErrMsg struct {
 	err  error
 }
 
+// actionablesLoadedMsg carries the classified actionable set. It rides actionGen
+// (the Actionable view's own generation), not the repo gen, so a repo switch
+// never drops an in-flight all-repos fan-out.
+type actionablesLoadedMsg struct {
+	gen   uint64
+	items []model.ActionItem
+}
+
 // --- tea.Cmd factories (each runs in its own goroutine; the gen guard in Update
 // drops results from a superseded repo scope) ---
 
@@ -59,6 +67,37 @@ func loadPRsCmd(repo string, gen uint64) tea.Cmd {
 			return loadErrMsg{gen: gen, view: model.ViewPRs, err: err}
 		}
 		return prsLoadedMsg{gen: gen, prs: prs}
+	}
+}
+
+// loadActionableThisRepoCmd builds the rich actionable set for one repo (pr list +
+// CI + batched review-thread counts).
+func loadActionableThisRepoCmd(repo string, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		items, err := gh.ListActionableForRepo(ctx, repo)
+		if err != nil {
+			return loadErrMsg{gen: gen, view: model.ViewActionable, err: err}
+		}
+		return actionablesLoadedMsg{gen: gen, items: items}
+	}
+}
+
+// loadActionableAllReposCmd aggregates actionable PRs across every configured gh
+// account and maps them back to local clones. Heavier (multi-account search +
+// slug→path scan), hence the longer timeout.
+func loadActionableAllReposCmd(gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		accounts := gh.AccountsToAggregate(ctx)
+		slugMap, _ := repos.SlugToPath(ctx) // best-effort: unmapped repos show display-only
+		items, err := gh.ListActionableAllRepos(ctx, accounts, slugMap)
+		if err != nil {
+			return loadErrMsg{gen: gen, view: model.ViewActionable, err: err}
+		}
+		return actionablesLoadedMsg{gen: gen, items: items}
 	}
 }
 
