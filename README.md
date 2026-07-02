@@ -81,6 +81,12 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 The sidebar lists your recent repos plus everything under `~/GitRepos`. The `●`
 marks the repo the panel is scoped to.
 
+### Theme
+
+Colors adapt to your terminal's background automatically (queried once at
+startup). If your terminal doesn't answer that query, set `WLAUNCH_THEME=dark`
+or `WLAUNCH_THEME=light` to skip detection and force a palette.
+
 ### Branch status column
 
 The middle column in the Branches view summarizes each branch against its upstream:

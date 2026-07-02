@@ -14,17 +14,46 @@ import (
 // to stderr keeps colors whether wlaunch is run directly or captured.
 var renderer = lipgloss.NewRenderer(os.Stderr)
 
-// Palette. 256-color codes chosen for legibility on a dark, semi-transparent
-// background (Warp runs with window opacity), so primary text is near-white and
-// metadata stays a readable mid-grey rather than a faint one.
+func init() {
+	// Resolve light-vs-dark up front, before Bubble Tea acquires the terminal.
+	// Bubble Tea ships its own version of this trick (see its tea_init.go) to stop
+	// lipgloss's background-color probe (an OSC 11 query/response over the tty)
+	// from racing Bubble Tea's own tty reader — but that one only warms the
+	// *default* renderer (os.Stdout/os.Stdin). wlaunch uses a separate renderer
+	// bound to os.Stderr (see above) with input read from a manually opened
+	// /dev/tty (cmd/wlaunch), so it needs its own warm-up here, before main opens
+	// that tty and starts reading raw input from it. Without this, the probe and
+	// Bubble Tea's reader can both be waiting on the same terminal response and the
+	// probe stalls for the full termenv.OSCTimeout (5s).
+	//
+	// WLAUNCH_THEME=dark|light skips the probe entirely for terminals that don't
+	// answer OSC 11 (e.g. some multiplexers), where the probe would otherwise still
+	// pay that timeout.
+	switch strings.ToLower(os.Getenv("WLAUNCH_THEME")) {
+	case "dark":
+		renderer.SetHasDarkBackground(true)
+	case "light":
+		renderer.SetHasDarkBackground(false)
+	default:
+		renderer.HasDarkBackground()
+	}
+}
+
+// Palette. Adaptive pairs pick a dark-background value (near-white text, chosen
+// for a dark, semi-transparent background — Warp runs with window opacity) and a
+// separate light-background value (dark text, since near-white would vanish on a
+// light background — this was the original bug). colAccentBg pairs unconditionally
+// with black foreground text, so it's terminal-background-agnostic and stays fixed.
 var (
-	colAccent = lipgloss.Color("111") // focus / numbers
-	colText   = lipgloss.Color("252") // primary text (titles, names)
-	colMeta   = lipgloss.Color("245") // branch / author metadata
-	colHint   = lipgloss.Color("244") // footer + inactive tabs
-	colErr    = lipgloss.Color("203") // error states
-	colSelBg  = lipgloss.Color("238") // selected row, unfocused pane
-	colSelFg  = lipgloss.Color("231") // near-white on selection
+	colAccent      = lipgloss.AdaptiveColor{Dark: "111", Light: "25"}  // focus / numbers (text only)
+	colAccentBg    = lipgloss.Color("111")                             // active tab / focused row chip, paired with black text
+	colText        = lipgloss.AdaptiveColor{Dark: "252", Light: "236"} // primary text (titles, names)
+	colMeta        = lipgloss.AdaptiveColor{Dark: "245", Light: "240"} // branch / author metadata
+	colHint        = lipgloss.AdaptiveColor{Dark: "244", Light: "243"} // footer hints
+	colTabInactive = lipgloss.AdaptiveColor{Dark: "250", Light: "242"} // inactive tabs
+	colErr         = lipgloss.AdaptiveColor{Dark: "203", Light: "160"} // error states
+	colSelBg       = lipgloss.Color("238")                             // selected row, unfocused pane
+	colSelFg       = lipgloss.Color("231")                             // near-white on selection
 )
 
 var (
@@ -37,15 +66,15 @@ var (
 
 	// Inactive tabs use a brighter grey than footer hints so the tab strip stays
 	// readable on the translucent background; the active tab is a solid accent chip.
-	styTabActive   = renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccent).Bold(true)
-	styTabInactive = renderer.NewStyle().Foreground(lipgloss.Color("250"))
+	styTabActive   = renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccentBg).Bold(true)
+	styTabInactive = renderer.NewStyle().Foreground(colTabInactive)
 )
 
 // rowStyle is the highlight bar for the selected row: a strong accent bar in the
 // focused pane, a subtle grey bar in the unfocused one.
 func rowStyle(focused bool) lipgloss.Style {
 	if focused {
-		return renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccent).Bold(true)
+		return renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccentBg).Bold(true)
 	}
 	return renderer.NewStyle().Foreground(colSelFg).Background(colSelBg)
 }
