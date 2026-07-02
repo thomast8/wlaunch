@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,12 +27,20 @@ func TestLeaderArmsAndDisarms(t *testing.T) {
 	if !m.awaiting {
 		t.Fatal("';' should arm the leader")
 	}
-	m = step(t, m, key("x")) // x isn't an action
+	m = step(t, m, key("z")) // z isn't an action
 	if m.awaiting {
 		t.Error("leader should disarm after the next key")
 	}
 	if m.filterStr != "" {
 		t.Errorf("a consumed leader key must not leak into the filter, got %q", m.filterStr)
+	}
+}
+
+func TestLeaderMenuShowsCodex(t *testing.T) {
+	m := loadedModel(t)
+	m = step(t, m, key(";"))
+	if out := m.View(); !strings.Contains(out, "x codex") {
+		t.Errorf("leader menu should advertise codex, got:\n%s", out)
 	}
 }
 
@@ -79,6 +88,18 @@ func TestCtrlOOpensShell(t *testing.T) {
 	}
 	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\t\n" {
 		t.Errorf("Ctrl+O Encode() = %q, want a shell launch", got)
+	}
+}
+
+func TestLeaderXOpensCodex(t *testing.T) {
+	m := loadedModel(t) // PRs view, first row = PR #289
+	m = step(t, m, key(";"))
+	m = step(t, m, key("x"))
+	if m.Selection() == nil {
+		t.Fatal(";x should launch the selection")
+	}
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tcodex\t\n" {
+		t.Errorf(";x Encode() = %q, want a codex launch", got)
 	}
 }
 

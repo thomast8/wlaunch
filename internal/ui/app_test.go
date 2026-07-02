@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/thomast8/wlaunch/internal/data/cache"
 	"github.com/thomast8/wlaunch/internal/model"
 )
 
@@ -49,6 +50,7 @@ func typeStr(t *testing.T, m Model, s string) Model {
 func loadedModel(t *testing.T) Model {
 	t.Helper()
 	m := New()
+	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
 	m = step(t, m, prsLoadedMsg{gen: m.gen, prs: []model.PR{
@@ -71,6 +73,7 @@ func loadedModel(t *testing.T) Model {
 func twoRepoModel(t *testing.T) Model {
 	t.Helper()
 	m := New()
+	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{
 		{Path: "/r", Name: "r"},
@@ -134,12 +137,90 @@ func TestStalePRLoadDropped(t *testing.T) {
 	}
 }
 
+func TestHydrateCacheSeedsFirstRender(t *testing.T) {
+	t.Setenv("WLAUNCH_CACHE_DIR", t.TempDir())
+	store := cache.Default()
+	cache.Write(store, cache.KeyRepos(), []model.Repo{{Path: "/r", Name: "r"}})
+	cache.Write(store, cache.KeyPRs("/r"), []model.PR{{Number: 42, Title: "cached", HeadRefName: "feat/cached", Author: "me"}})
+
+	m := New().HydrateCache()
+	if len(m.repos) != 1 || m.repos[0].Path != "/r" {
+		t.Fatalf("cached repos not hydrated: %+v", m.repos)
+	}
+	if m.state[model.ViewPRs] != stateReady || len(m.prs) != 1 || m.prs[0].Number != 42 {
+		t.Fatalf("cached PRs not hydrated: state=%v prs=%+v", m.state[model.ViewPRs], m.prs)
+	}
+	if m.loaded[model.ViewPRs] {
+		t.Fatal("hydrating cache must not mark the live PR refresh as already loaded")
+	}
+}
+
+func TestScopeReloadKeepsCachedRowsWhileRefreshing(t *testing.T) {
+	t.Setenv("WLAUNCH_CACHE_DIR", t.TempDir())
+	store := cache.Default()
+	cache.Write(store, cache.KeyPRs("/r"), []model.PR{{Number: 42, Title: "cached", HeadRefName: "feat/cached", Author: "me"}})
+
+	m := New()
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
+	if m.state[model.ViewPRs] != stateReady || len(m.prs) != 1 {
+		t.Fatalf("cached PRs should stay visible while refresh runs: state=%v prs=%+v", m.state[model.ViewPRs], m.prs)
+	}
+	if !m.loaded[model.ViewPRs] {
+		t.Fatal("scope reload should kick the live refresh after showing cache")
+	}
+	if m.status != "refreshing PRs..." {
+		t.Fatalf("status = %q, want refresh marker", m.status)
+	}
+}
+
+func TestScopeReloadPrefetchesSiblingViews(t *testing.T) {
+	m := New()
+	m.cache = nil
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
+
+	for _, v := range []model.View{model.ViewPRs, model.ViewBranches, model.ViewWorktrees} {
+		if !m.loaded[v] {
+			t.Fatalf("%s should be prefetched", v.Label())
+		}
+		if m.state[v] != stateLoading {
+			t.Fatalf("%s state = %v, want loading", v.Label(), m.state[v])
+		}
+	}
+
+	m = step(t, m, prsLoadedMsg{gen: m.gen, prs: []model.PR{{Number: 42}}})
+	if !m.anyLoading() {
+		t.Fatal("sibling prefetches should keep loading active until they complete")
+	}
+	m = step(t, m, branchesLoadedMsg{gen: m.gen, branches: []model.Branch{{Name: "main"}}})
+	m = step(t, m, worktreesLoadedMsg{gen: m.gen, worktrees: []model.Worktree{{Path: "/r", Branch: "main"}}})
+	if m.anyLoading() {
+		t.Fatal("loading should stop after all prefetched views complete")
+	}
+}
+
+func TestSidebarMoveWarmsFocusedRepoOnce(t *testing.T) {
+	m := twoRepoModel(t)
+	m.focus = focusSidebar
+	m = step(t, m, down)
+
+	if !m.warmed["/r2"] {
+		t.Fatal("highlighted repo should be queued for cache warming")
+	}
+	if m.scopedIdx != 0 {
+		t.Fatalf("sidebar prefetch should not change scoped repo, got %d", m.scopedIdx)
+	}
+}
+
 func TestViewRendersWithoutPanic(t *testing.T) {
 	m := loadedModel(t)
 	if out := m.View(); out == "" {
 		t.Error("View() returned empty for a ready model")
 	}
 	// also exercise loading/empty/error panels
+	m.state[model.ViewPRs] = stateIdle
+	_ = m.View()
 	m.state[model.ViewPRs] = stateLoading
 	_ = m.View()
 	m.state[model.ViewPRs] = stateEmpty

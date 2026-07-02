@@ -4,7 +4,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,6 +38,25 @@ func main() {
 		return
 	}
 
+	// Optional startup flags (the wl wrapper forwards "$@"): --view opens directly
+	// on a view, --scope sets the Actionable view's repo scope. Unknown flags are
+	// ignored so env-driven knobs and future args don't error here.
+	var viewFlag, scopeFlag string
+	fs := flag.NewFlagSet("wlaunch", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&viewFlag, "view", "", "initial view: actionable")
+	fs.StringVar(&scopeFlag, "scope", "", "actionable scope: all | repo")
+	_ = fs.Parse(os.Args[1:])
+
+	m := ui.New()
+	if viewFlag == "actionable" {
+		m = m.WithInitialView(model.ViewActionable)
+	}
+	if scopeFlag == "all" {
+		m = m.WithAllReposScope()
+	}
+	m = m.HydrateCache()
+
 	// Drive the UI from the controlling terminal so stdout stays a clean data
 	// channel: render → stderr, input ← /dev/tty, result → stdout.
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
@@ -52,7 +73,7 @@ func main() {
 	if os.Getenv("WLAUNCH_NO_ALTSCREEN") == "" {
 		opts = append(opts, tea.WithAltScreen())
 	}
-	p := tea.NewProgram(ui.New(), opts...)
+	p := tea.NewProgram(m, opts...)
 
 	final, err := p.Run()
 	if err != nil {
