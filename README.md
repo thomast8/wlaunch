@@ -4,7 +4,8 @@ A unified launcher TUI for a git / PR / worktree workflow. One terminal UI that
 replaces a pile of single-purpose launchers: a repo sidebar on the left, and a
 main panel that switches between a repo's **PRs**, **branches**, **worktrees**,
 and an **Actionable** view of PRs that need you. Open any selection in `claude`,
-`codex`, `lazygit`, `serie`, or a plain shell, landing in the right worktree every time.
+`codex`, `lazygit`, `serie`, or a plain shell — landing in the right worktree
+every time.
 
 The **Actionable** view triages PRs by the least-friction, highest-impact next
 thing you can do: ready-to-merge work, easy review requests, addressable review
@@ -55,18 +56,26 @@ The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
 a mode. Tools and actions live behind a `;` leader, so the letters stay free for typing.
 `esc` clears the filter (it never quits); `Ctrl+C` is the only quit.
 
+The sidebar is focused on startup — `enter` (or `tab`, an alias) launches claude on
+the highlighted repo's main checkout with zero preamble, the fast path for "just jump
+into a repo." `→` moves into the panel to browse a repo's PRs/branches/worktrees/
+Actionable items; `Shift+Tab` steps back out to the sidebar from wherever you are in
+the panel.
+
 | key | action |
 |-----|--------|
 | type any text | filter the current view live |
 | `esc` | clear the filter (does **not** quit) |
-| `↑` `↓` | move within the list (repos in the sidebar, rows in the panel) |
-| `←` / `→` (panel) | switch view (PRs · Branches · Worktrees · Actionable) |
+| `↑` `↓` | move within the list (repos in the sidebar, rows in the panel). The sidebar wraps (↑ from the top jumps to the pinned-last `~`); panel rows clamp instead |
+| `←` / `→` (panel) | switch view (PRs · Branches · Worktrees · Actionable), wrapping around in either direction |
 | `→` (sidebar) | scope the panel to the highlighted repo and move into it to browse |
-| `tab` | toggle focus; moving into the panel scopes it to the highlighted repo (no reload if it's already scoped) |
-| `enter` (sidebar) | launch claude on the repo's main checkout — the fast path when you just want to jump into a repo (same target as `;c` from the sidebar) |
-| `enter` (panel) | launch the selection in claude (the default action) |
-| `Ctrl+O` (panel) | open the selection in a plain shell (Enter-modifiers like Shift/Ctrl+Enter can't be detected by terminals, so a Ctrl-chord is used; `o` = open) |
-| `;` then `c` `x` `l` `s` `o` | open the selection (or sidebar repo) in claude / codex / lazygit / serie / a plain shell |
+| `Shift+Tab` (panel) | step focus back to the sidebar |
+| `enter` / `tab` (sidebar) | launch claude on the repo's main checkout — the fast path when you just want to jump into a repo (same target as `;c` from the sidebar). `tab` is a plain alias of `enter`; it no longer toggles focus |
+| `enter` / `tab` (panel) | launch the selection in claude (the default action) |
+| `⌥enter` (Option+Enter, either focus) | same as `enter`, but launches codex instead of claude (Ctrl+Enter can't be detected by terminals as distinct from plain Enter, but Alt+Enter can) |
+| `⇧enter` (Shift+Enter, either focus) | same as `enter`, but opens a plain shell instead of claude. Terminals deliver Shift+Enter as the same byte as `Ctrl+J`, so pressing literal Ctrl+J does this too — harmless, just worth knowing |
+| `Ctrl+O` (either focus) | the same shell launch as `⇧enter` — an always-works alias that doesn't depend on how a given terminal encodes Shift+Enter (`o` = open) |
+| `;` then `c` `l` `s` `o` `x` | open the selection (or sidebar repo) in claude / lazygit / serie / a plain shell / codex — `;x` is the always-works fallback for codex regardless of whether `⌥enter` reaches your terminal |
 | `;` then `n` (any view) | create a new-branch worktree in the scoped repo (or the highlighted sidebar repo). Two-stage prompt: a **name** (placeholder is a random `adjective-noun` slug — empty Enter takes it) then a **base** to branch from (placeholder is the repo's detected default branch — empty Enter lets the script auto-detect origin's default). So two Enters = "random name off the default branch" |
 | `;` then `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
 | `;` then `p` (branches) | pull / fast-forward the selected branch (ff-only, safe; in-place for checked-out branches) |
@@ -78,8 +87,11 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 | `;` then `D` (worktrees) | remove all worktrees here (respects the filter; main skipped). Dirty ones go into one force-remove confirm; then offers to delete the freed branches |
 | `Ctrl+C` | quit / cancel (drops to a shell) |
 
-The sidebar lists your recent repos plus everything under `~/GitRepos`. The `●`
-marks the repo the panel is scoped to.
+The sidebar lists your recent repos plus everything under `~/GitRepos`, followed by
+a pinned `~` entry for your home directory — a quick-launch location outside any
+project. Scoping `~` shows an empty panel ("not a git repo — nothing to browse");
+launch claude/codex/a shell there straight from the sidebar the same way as any
+repo. The `●` marks the repo the panel is scoped to.
 
 ### Theme
 

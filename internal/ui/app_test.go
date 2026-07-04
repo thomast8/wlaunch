@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,6 +48,10 @@ func typeStr(t *testing.T, m Model, s string) Model {
 	return m
 }
 
+// loadedModel returns a model already focused in the panel (PRs view, scoped to
+// /r) since most callers exercise panel row actions. Startup itself now defaults
+// to the sidebar (see New()) — tests of that specific behavior should press ←
+// from this model's PRs view (the leftmost) to step back out to the sidebar.
 func loadedModel(t *testing.T) Model {
 	t.Helper()
 	m := New()
@@ -65,6 +70,7 @@ func loadedModel(t *testing.T) Model {
 		{Path: "/r", Branch: "main", HEAD: "abc123", IsMain: true},
 		{Path: "/wt/pr289", Branch: "fix/x", HEAD: "def456"},
 	}})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // sidebar (the startup default) -> panel
 	return m
 }
 
@@ -242,11 +248,14 @@ func TestSwitchToBranchesAndPick(t *testing.T) {
 	}
 }
 
+// The sidebar is the startup default (New()), so this needs no navigation at all.
 func TestSidebarLaunchesRepoRoot(t *testing.T) {
-	m := loadedModel(t)
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab}) // focus the repo sidebar
+	m := New()
+	m.cache = nil
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
 	if m.focus != focusSidebar {
-		t.Fatalf("focus = %v, want sidebar", m.focus)
+		t.Fatalf("focus = %v, want sidebar (the startup default)", m.focus)
 	}
 	m = leader(t, m, "c") // launch claude on the highlighted repo's root
 	sel := m.Selection()
@@ -257,9 +266,12 @@ func TestSidebarLaunchesRepoRoot(t *testing.T) {
 
 // Sidebar Enter is the fast path: launch claude on the highlighted repo's main
 // checkout (kind=repo, empty ref), the same target ';c' produces from the sidebar.
+// The sidebar is the startup default, so plain Enter fires with zero preamble.
 func TestSidebarEnterLaunchesClaudeOnMain(t *testing.T) {
-	m := loadedModel(t)
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab})   // focus sidebar
+	m := New()
+	m.cache = nil
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // enter launches claude on the repo root
 	sel := m.Selection()
 	if sel == nil {
@@ -270,31 +282,70 @@ func TestSidebarEnterLaunchesClaudeOnMain(t *testing.T) {
 	}
 }
 
-// Moving focus into the panel (Tab or →) scopes it to the highlighted repo, so the
-// PRs/branches/worktrees the panel shows follow the sidebar selection.
+// Tab is a plain alias of Enter, so it launches the same repo-root pick as Enter —
+// it no longer focuses the sidebar (already the startup default) or moves into it.
+func TestSidebarTabLaunchesRepoRootLikeEnter(t *testing.T) {
+	m := New()
+	m.cache = nil
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	sel := m.Selection()
+	if sel == nil || sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" || sel.Tool != "claude" {
+		t.Errorf("sidebar tab launch = %+v, want repo/claude on /r", sel)
+	}
+}
+
+// Alt+Enter launches codex instead of claude, from either focus.
+func TestAltEnterLaunchesCodex(t *testing.T) {
+	m := loadedModel(t) // panel-focused, PR #289 under the cursor
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	sel := m.Selection()
+	if sel == nil || sel.Kind != model.KindPR || sel.Ref != "289" || sel.Tool != "codex" {
+		t.Errorf("alt+enter panel launch = %+v, want PR #289/codex", sel)
+	}
+}
+
+func TestAltEnterFromSidebarLaunchesCodexOnRepoRoot(t *testing.T) {
+	m := New()
+	m.cache = nil
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	sel := m.Selection()
+	if sel == nil || sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" || sel.Tool != "codex" {
+		t.Errorf("alt+enter sidebar launch = %+v, want repo/codex on /r", sel)
+	}
+}
+
+// → is now the only way to move focus from the sidebar into the panel, scoping it
+// to the highlighted repo so the PRs/branches/worktrees shown follow the sidebar
+// selection. (Tab no longer does this — it launches instead, see TestSidebarTab*.)
 func TestEnterPanelScopesToHighlightedRepo(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		key  tea.KeyType
-	}{
-		{"tab", tea.KeyTab},
-		{"right", tea.KeyRight},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := twoRepoModel(t)
-			m = step(t, m, tea.KeyMsg{Type: tea.KeyTab}) // focus sidebar (repo 0 scoped)
-			m = step(t, m, down)                         // highlight repo 1
-			m = step(t, m, tea.KeyMsg{Type: tc.key})     // enter the panel
-			if m.focus != focusMain {
-				t.Errorf("focus = %v, want panel", m.focus)
-			}
-			if m.scopedIdx != 1 {
-				t.Errorf("scopedIdx = %d, want 1 (scoped to the highlighted repo)", m.scopedIdx)
-			}
-			if m.Selection() != nil {
-				t.Errorf("entering the panel must not launch; got %+v", m.Selection())
-			}
-		})
+	m := twoRepoModel(t)                           // sidebar-focused by default, repo 0 scoped
+	m = step(t, m, down)                           // highlight repo 1
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // enter the panel
+	if m.focus != focusMain {
+		t.Errorf("focus = %v, want panel", m.focus)
+	}
+	if m.scopedIdx != 1 {
+		t.Errorf("scopedIdx = %d, want 1 (scoped to the highlighted repo)", m.scopedIdx)
+	}
+	if m.Selection() != nil {
+		t.Errorf("entering the panel must not launch; got %+v", m.Selection())
+	}
+}
+
+// Shift+Tab is the way back to the sidebar from the panel — Left/Right stay
+// pure view-cycling (they wrap all the way around, including through
+// Actionable), so returning to the sidebar needed its own key rather than
+// overloading Left at the first view (which Actionable's wraparound already
+// depends on: Left from PRs cycles to Actionable, the last view).
+func TestShiftTabReturnsToSidebar(t *testing.T) {
+	m := loadedModel(t) // panel-focused, PRs view
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.focus != focusSidebar {
+		t.Errorf("focus = %v, want sidebar", m.focus)
 	}
 }
 
@@ -391,5 +442,124 @@ func TestFilterReducesRows(t *testing.T) {
 	}
 	if len(m.visibleRows()) != all {
 		t.Errorf("esc should clear the filter back to %d rows, got %d", all, len(m.visibleRows()))
+	}
+}
+
+// plainModel loads a real repo plus a synthetic Plain entry (mirroring the "~"
+// home entry repos.List() appends), with the plain entry highlighted.
+func plainModel(t *testing.T) Model {
+	t.Helper()
+	m := New()
+	m.cache = nil
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, reposLoadedMsg{repos: []model.Repo{
+		{Path: "/r", Name: "r"},
+		{Path: "/home/u", Name: "~", Plain: true},
+	}})
+	return step(t, m, down) // highlight the plain entry (sideCur=1)
+}
+
+// Scoping a Plain entry must skip the gh/git loads entirely (there is nothing
+// to browse) and land all three views in a clean empty state, not stateError.
+func TestPlainRepoScopeSkipsLoads(t *testing.T) {
+	m := plainModel(t)
+	nm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight}) // scope + enter panel
+	m = nm.(Model)
+	if cmd != nil {
+		t.Error("scoping a plain entry must not kick any load commands")
+	}
+	for _, v := range []model.View{model.ViewPRs, model.ViewBranches, model.ViewWorktrees} {
+		if m.state[v] != stateEmpty {
+			t.Errorf("state[%v] = %v, want stateEmpty for a plain scope", v, m.state[v])
+		}
+	}
+}
+
+// The panel's empty state names the reason for a plain scope instead of the
+// generic per-view "no PRs/branches/worktrees" copy.
+func TestPlainRepoPanelShowsFriendlyEmptyMessage(t *testing.T) {
+	m := plainModel(t)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // scope + enter panel
+	if out := m.View(); !strings.Contains(out, "Not a git repo") {
+		t.Errorf("expected a friendly empty message for a plain scope, got:\n%s", out)
+	}
+}
+
+// A Plain sidebar entry launches exactly like any other repo — claude, codex,
+// and shell all just emit Kind=repo at its Path, unchanged from emitRepo.
+func TestPlainRepoLaunchesClaudeCodexShell(t *testing.T) {
+	m := plainModel(t)
+
+	claude := step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if sel := claude.Selection(); sel == nil || sel.Kind != model.KindRepo || sel.RepoRoot != "/home/u" || sel.Ref != "" || sel.Tool != "claude" {
+		t.Errorf("enter on plain entry = %+v", sel)
+	}
+
+	codex := step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	if sel := codex.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "codex" {
+		t.Errorf("alt+enter on plain entry = %+v", sel)
+	}
+
+	shiftEnter := step(t, m, tea.KeyMsg{Type: tea.KeyCtrlJ}) // Shift+Enter arrives as ctrl+j
+	if sel := shiftEnter.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "shell" {
+		t.Errorf("shift+enter (ctrl+j) on plain entry = %+v", sel)
+	}
+
+	ctrlO := step(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	if sel := ctrlO.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "shell" {
+		t.Errorf("ctrl+o on plain entry = %+v", sel)
+	}
+}
+
+// ';n' (new worktree) is nonsensical outside a git repo and must refuse with a
+// status message rather than opening the name-input prompt.
+func TestNewWorktreeRefusedOnPlainRepo(t *testing.T) {
+	m := plainModel(t)
+	m = leader(t, m, "n")
+	if m.inMode != inputNone {
+		t.Errorf("inMode = %v, want inputNone (refused for a plain entry)", m.inMode)
+	}
+	if m.status == "" {
+		t.Error("expected a refusal status message for ';n' on a plain entry")
+	}
+}
+
+// Once scoped, the panel's empty state for a plain entry offers ⏎/⌥⏎/⇧⏎ (see
+// TestPlainRepoPanelShowsFriendlyEmptyMessage) — those keys must actually launch
+// from THAT focus too, not silently no-op because emit() finds no ready row.
+func TestPlainRepoLaunchesFromPanelFocusToo(t *testing.T) {
+	m := plainModel(t)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // scope + enter panel on "~"
+	if m.focus != focusMain {
+		t.Fatalf("focus = %v, want panel", m.focus)
+	}
+
+	claude := step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if sel := claude.Selection(); sel == nil || sel.Kind != model.KindRepo || sel.RepoRoot != "/home/u" || sel.Tool != "claude" {
+		t.Errorf("enter from panel focus on a plain scope = %+v", sel)
+	}
+
+	codex := step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	if sel := codex.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "codex" {
+		t.Errorf("alt+enter from panel focus on a plain scope = %+v", sel)
+	}
+
+	shell := step(t, m, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if sel := shell.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "shell" {
+		t.Errorf("shift+enter from panel focus on a plain scope = %+v", sel)
+	}
+}
+
+// Up from the top of the sidebar wraps to the last entry (and Down from the
+// last wraps to the top) — the fast way to reach the pinned-last "~" entry.
+func TestSidebarUpWrapsToLastEntry(t *testing.T) {
+	m := twoRepoModel(t) // sidebar-focused, sideCur=0
+	m = step(t, m, up)
+	if m.sideCur != len(m.repos)-1 {
+		t.Errorf("sideCur = %d after wrapping up, want %d (the last entry)", m.sideCur, len(m.repos)-1)
+	}
+	m = step(t, m, down)
+	if m.sideCur != 0 {
+		t.Errorf("sideCur = %d after wrapping down from the last entry, want 0", m.sideCur)
 	}
 }

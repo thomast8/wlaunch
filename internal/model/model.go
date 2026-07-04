@@ -65,10 +65,13 @@ func (t Target) Tool() string {
 	}
 }
 
-// Repo is a git repository the launcher can scope to.
+// Repo is a git repository the launcher can scope to, or a plain non-repo
+// quick-launch location (Plain=true; e.g. $HOME) that can only be launched
+// on directly, not browsed for PRs/branches/worktrees.
 type Repo struct {
-	Path string // absolute path to the main checkout root
-	Name string // basename(Path)
+	Path  string // absolute path to the main checkout root (or plain dir)
+	Name  string // basename(Path) for repos, "~" for the home entry
+	Plain bool   // true for a non-git quick location; zero value = real repo
 }
 
 // PR mirrors the fields wlaunch reads from `gh pr list --json`.

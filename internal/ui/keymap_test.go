@@ -79,7 +79,10 @@ func TestOnlyCtrlCQuits(t *testing.T) {
 }
 
 // Ctrl+O opens the selection in a shell, while plain Enter stays claude
-// (Enter-modifiers are indistinguishable from Enter, so a Ctrl-chord is required).
+// (Ctrl+Enter is indistinguishable from plain Enter at the terminal layer, so
+// Ctrl+O is kept as an always-works alias; Shift+Enter — which arrives as
+// ctrl+j, see TestShiftEnterAliasesCtrlOForShell — is the faster path, and
+// Alt+Enter is reserved for codex).
 func TestCtrlOOpensShell(t *testing.T) {
 	m := loadedModel(t) // PRs view, first row = PR #289
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
@@ -88,6 +91,17 @@ func TestCtrlOOpensShell(t *testing.T) {
 	}
 	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\t\n" {
 		t.Errorf("Ctrl+O Encode() = %q, want a shell launch", got)
+	}
+}
+
+// Shift+Enter arrives at the terminal layer as ctrl+j (probe-confirmed against
+// real Warp), so it's bound alongside Ctrl+O as the "Enter-modifier for shell"
+// — the third modifier, alongside Alt+Enter for codex.
+func TestShiftEnterAliasesCtrlOForShell(t *testing.T) {
+	m := loadedModel(t) // panel-focused, PRs view, first row = PR #289
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if got := m.Selection().Encode(); got != "v1\tpr\t/r\t289\tshell\t\n" {
+		t.Errorf("ctrl+j (shift+enter) Encode() = %q, want a shell launch", got)
 	}
 }
 

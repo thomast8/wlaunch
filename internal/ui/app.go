@@ -148,7 +148,7 @@ func New() Model {
 	bi.Prompt = ""
 
 	return Model{
-		focus:     focusMain,
+		focus:     focusSidebar,
 		view:      model.ViewPRs,
 		spinner:   sp,
 		cache:     cache.Default(),
@@ -159,8 +159,14 @@ func New() Model {
 }
 
 // WithInitialView opens the launcher on a specific view (e.g. the Actionable
-// tab). Used by the --view flag.
-func (m Model) WithInitialView(v model.View) Model { m.view = v; return m }
+// tab). Used by the --view flag. Also focuses the panel: the whole point of
+// asking for a specific view up front is to land ready to interact with it,
+// not stranded in the sidebar (the default startup focus) behind an extra →.
+func (m Model) WithInitialView(v model.View) Model {
+	m.view = v
+	m.focus = focusMain
+	return m
+}
 
 // WithAllReposScope makes the Actionable view default to all-repos rather than
 // the scoped repo. Used by the --scope flag / the dedicated tab.
@@ -282,6 +288,10 @@ func (m *Model) maybeLoadActionable() tea.Cmd {
 		m.errMsg[model.ViewActionable] = "no repo to scope to"
 		return nil
 	}
+	if m.scopedIdx >= 0 && m.scopedIdx < len(m.repos) && m.repos[m.scopedIdx].Plain {
+		m.state[model.ViewActionable] = stateEmpty
+		return nil
+	}
 	return tea.Batch(m.spinner.Tick, loadActionableThisRepoCmd(repo, m.actionGen))
 }
 
@@ -311,6 +321,11 @@ func (m *Model) maybeLoadScopedView(v model.View) tea.Cmd {
 }
 
 func (m *Model) maybeLoadCurrentView() tea.Cmd {
+	// A plain (non-git) scope has nothing to load for any view — cycling views
+	// with ←/→ must not spawn gh/git against it.
+	if m.scopedIdx >= 0 && m.scopedIdx < len(m.repos) && m.repos[m.scopedIdx].Plain {
+		return nil
+	}
 	if m.view == model.ViewActionable {
 		return m.maybeLoadActionable()
 	}
@@ -328,6 +343,9 @@ func (m *Model) prefetchScopedViews() tea.Cmd {
 func (m *Model) prefetchFocusedRepo() tea.Cmd {
 	if m.focus != focusSidebar || m.sideCur < 0 || m.sideCur >= len(m.repos) {
 		return nil
+	}
+	if m.repos[m.sideCur].Plain {
+		return nil // nothing to prefetch for a non-git quick-launch entry
 	}
 	repo := m.repos[m.sideCur].Path
 	if repo == "" || repo == m.scopedPath() {
@@ -553,7 +571,9 @@ func (m Model) anyLoading() bool {
 
 // scopeReload points the views at repos[idx], invalidating in-flight loads via a
 // new generation, and kicks all three async loads (the cheap ones preload so the
-// view is warm when the user arrows to it).
+// view is warm when the user arrows to it). A Plain entry (e.g. the "~" home
+// quick-launch) has no PRs/branches/worktrees to load — gh/git would just error
+// against it — so it skips straight to a clean empty state instead.
 func (m *Model) scopeReload(idx int) tea.Cmd {
 	m.scopedIdx = idx
 	m.gen++
@@ -566,6 +586,13 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 	if m.actScope == scopeThisRepo {
 		m.actionLoaded = false // this-repo actionable data is now stale; all-repos is repo-independent
 	}
+	if idx >= 0 && idx < len(m.repos) && m.repos[idx].Plain {
+		m.state[model.ViewPRs] = stateEmpty
+		m.state[model.ViewBranches] = stateEmpty
+		m.state[model.ViewWorktrees] = stateEmpty
+		m.loaded = [viewN]bool{}
+		return nil
+	}
 	m.state[model.ViewPRs] = stateIdle
 	m.state[model.ViewBranches] = stateIdle
 	m.state[model.ViewWorktrees] = stateIdle
@@ -577,7 +604,7 @@ func (m *Model) scopeReload(idx int) tea.Cmd {
 // enterPanel moves focus into the panel, scoping it to the highlighted sidebar
 // repo first when that differs from what's loaded. Scoping is the async load
 // scopeReload kicks; when the repo is already scoped this is a cheap focus flip
-// with no reload (so repeated Tab toggles don't respawn gh/git).
+// with no reload (so repeated → presses don't respawn gh/git).
 func (m *Model) enterPanel() tea.Cmd {
 	var cmd tea.Cmd
 	if m.sideCur != m.scopedIdx {
@@ -606,14 +633,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleMainKey is the default state: printable keys filter live (no '/' needed),
-// arrows/Tab navigate, Enter launches/scopes, ';' opens the tool+action leader, and
-// esc clears the filter rather than quitting (Ctrl+C is the only quit).
+// arrows navigate, Enter/Tab launch, ';' opens the tool+action leader, and esc
+// clears the filter rather than quitting (Ctrl+C is the only quit).
 func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
-	case tea.KeyTab:
-		if m.focus == focusSidebar {
-			return m, m.enterPanel() // entering the panel scopes to the highlighted repo
-		}
+	case tea.KeyTab, tea.KeyEnter:
+		// Tab is a plain alias of Enter (least-resistance launch from wherever focus
+		// already is), not a focus toggle — → is the only way into the panel, ← the
+		// only way back out. Alt+Enter (and Alt+Tab, for symmetry) launches codex
+		// instead of claude; see the Ctrl+O comment below for why a modifier key is
+		// the only reliable way to distinguish this from plain Enter.
+		return m.launchFromKey(msg)
+	case tea.KeyShiftTab:
+		// The way back to the sidebar now that Tab launches instead of toggling.
+		// Left/Right stay pure view-cycling (they wrap all the way around,
+		// including through Actionable), so returning to the sidebar needed its
+		// own key rather than overloading Left at the first view.
 		m.focus = focusSidebar
 		return m, nil
 	case tea.KeyLeft:
@@ -638,20 +673,13 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyDown:
 		m.move(1)
 		return m, m.prefetchFocusedRepo()
-	case tea.KeyEnter:
-		m.status = ""
-		// In the sidebar, enter is the fast path: launch claude on the highlighted
-		// repo's main checkout (kind=repo, empty ref). Scoping the panel to browse a
-		// repo's PRs/branches/worktrees happens by moving focus into it (Tab or →).
-		// In the panel, enter launches the selection with the default tool (claude).
-		if m.focus == focusSidebar {
-			return m.emitRepo(model.TargetDefault)
-		}
-		return m.emit(model.TargetDefault)
-	case tea.KeyCtrlO:
-		// Ctrl+O = "open" in a plain shell. (Enter-modifiers like Shift/Ctrl+Enter are
-		// indistinguishable from plain Enter at the terminal layer, so a Ctrl-chord is
-		// the only reliable second launch key; 'o' keeps the mnemonic from `;o`.)
+	case tea.KeyCtrlO, tea.KeyCtrlJ:
+		// Shift+Enter arrives at the terminal layer as ctrl+j (probe-confirmed against
+		// real Warp), so KeyCtrlJ is the third Enter-modifier: ⏎ claude · ⌥⏎ codex ·
+		// ⇧⏎ shell. Ctrl+O stays bound to the same launch as an always-works alias —
+		// 'o' keeps the mnemonic from `;o`, and it doesn't depend on Shift+Enter being
+		// delivered as ctrl+j (a terminal-encoding detail another terminal could differ
+		// on). Ctrl+Enter is still indistinguishable from plain Enter and stays unusable.
 		m.status = ""
 		return m.launch(model.TargetShell)
 	case tea.KeyEsc:
@@ -1081,18 +1109,45 @@ func (m Model) launch(t model.Target) (tea.Model, tea.Cmd) {
 	if m.focus == focusSidebar {
 		return m.emitRepo(t)
 	}
+	// A plain scope (e.g. the "~" home entry) has no PRs/branches/worktrees to pick
+	// a row from — its panel is just the empty-state message — so a panel-focused
+	// launch targets the scoped repo directly instead of falling through to emit()
+	// (which would silently no-op: there is no ready row to read a Selection from).
+	if m.scopedIdx >= 0 && m.scopedIdx < len(m.repos) && m.repos[m.scopedIdx].Plain {
+		return m.emitRepoAt(m.scopedIdx, t)
+	}
 	return m.emit(t)
+}
+
+// launchFromKey resolves an Enter/Tab keypress to a launch: claude by default,
+// codex when the Alt modifier is set (Option+Enter on a Mac keyboard — the only
+// Enter-modifier this terminal stack can distinguish from plain Enter; see the
+// Ctrl+O comment above for why Shift/Ctrl+Enter can't be used the same way).
+func (m Model) launchFromKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.status = ""
+	t := model.TargetDefault
+	if msg.Alt {
+		t = model.TargetCodex
+	}
+	return m.launch(t)
 }
 
 // emitRepo launches a tool on the highlighted sidebar repo's root (the claude-here
 // case): kind=repo, empty ref.
 func (m Model) emitRepo(t model.Target) (tea.Model, tea.Cmd) {
-	if m.sideCur < 0 || m.sideCur >= len(m.repos) {
+	return m.emitRepoAt(m.sideCur, t)
+}
+
+// emitRepoAt is emitRepo generalized to an explicit repos[] index, so a
+// panel-focused launch on a plain (non-git) scope can target the scoped repo
+// instead of the sidebar's highlighted one.
+func (m Model) emitRepoAt(idx int, t model.Target) (tea.Model, tea.Cmd) {
+	if idx < 0 || idx >= len(m.repos) {
 		return m, nil
 	}
 	m.selection = &model.Selection{
 		Kind:     model.KindRepo,
-		RepoRoot: m.repos[m.sideCur].Path,
+		RepoRoot: m.repos[idx].Path,
 		Ref:      "",
 		Tool:     t.Tool(),
 	}
@@ -1112,6 +1167,10 @@ func (m Model) startNewWorktree() (tea.Model, tea.Cmd) {
 	}
 	if idx < 0 || idx >= len(m.repos) {
 		m.status = "no repo to create a worktree in"
+		return m, nil
+	}
+	if m.repos[idx].Plain {
+		m.status = "not a git repo — can't create a worktree here"
 		return m, nil
 	}
 	m.wtRepoPath = m.repos[idx].Path
@@ -1211,8 +1270,10 @@ func (m Model) cancelNewWorktree() Model {
 
 func (m *Model) move(d int) {
 	if m.focus == focusSidebar {
+		// Wraps (unlike the panel below): the "~" home entry is always pinned last,
+		// so wrapping is what makes it reachable in one keystroke (Up from the top).
 		if n := len(m.repos); n > 0 {
-			m.sideCur = clamp(m.sideCur+d, 0, n-1)
+			m.sideCur = ((m.sideCur+d)%n + n) % n
 		}
 		return
 	}
@@ -1453,12 +1514,12 @@ func (m Model) renderFooter(w int) string {
 		if m.filterStr != "" {
 			clear = "esc clear · "
 		}
-		nav := "type to filter · ↑↓ move · ←→ view · enter claude · ^O shell · "
+		nav := "type to filter · ↑↓ move · ←→ view · enter/tab claude · ⌥enter codex · ⇧enter shell · ⇧tab back · "
 		if m.focus == focusSidebar {
-			nav = "type to filter · ↑↓ repo · enter claude · → browse · ^O shell · "
+			nav = "type to filter · ↑↓ repo · enter/tab claude · ⌥enter codex · ⇧enter shell · → browse · "
 		}
 		hint = styHint.Render(clear+nav) +
-			styHeading.Render("; tools/actions") + styHint.Render(" · tab focus · ^C quit")
+			styHeading.Render("; tools/actions") + styHint.Render(" · ^C quit")
 	}
 	// MaxWidth (not Width) so an over-long hint truncates to one line rather than
 	// wrapping; the most useful hints lead, the trailing ones drop first.
@@ -1519,7 +1580,11 @@ func (m Model) renderPanel(w, h int) string {
 	case stateError:
 		body = styErr.Render("⚠ " + m.errMsg[m.view])
 	case stateEmpty:
-		body = styMeta.Render(emptyMsg(m.view))
+		if m.scopedIdx >= 0 && m.scopedIdx < len(m.repos) && m.repos[m.scopedIdx].Plain {
+			body = styMeta.Render("Not a git repo — nothing to browse. ⏎ claude · ⌥⏎ codex · ⇧⏎ shell.")
+		} else {
+			body = styMeta.Render(emptyMsg(m.view))
+		}
 	case stateReady:
 		vis := m.visibleRows()
 		if len(vis) == 0 {

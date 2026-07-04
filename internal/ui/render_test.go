@@ -75,6 +75,8 @@ func TestSnapshotAllViews(t *testing.T) {
 		{Path: "/Users/x/worktrees/PolicyAsCode/detached", HEAD: "777ccc666ddd", Detached: true},
 	}})
 
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // sidebar (the startup default) -> panel, still PRs
+
 	for _, v := range []struct {
 		name string
 		key  tea.KeyMsg
@@ -93,6 +95,6 @@ func TestSnapshotAllViews(t *testing.T) {
 	}
 
 	// sidebar focused: snapshot to eyeball the focus affordance + scoped marker
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	t.Logf("=== sidebar focused ===\n%s", ansi.Strip(m.View()))
 }

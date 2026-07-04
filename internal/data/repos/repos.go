@@ -149,14 +149,17 @@ func SlugToPath(ctx context.Context) (map[string]string, error) {
 
 // List returns the scoped-repo candidates, default/most-recent first, deduped and
 // filtered to directories that still exist. repo-default.sh runs with the process
-// cwd so "current repo if in one" resolves correctly.
+// cwd so "current repo if in one" resolves correctly. A synthetic, non-git "~"
+// entry for $HOME is appended last, so the sidebar always offers a quick-launch
+// location outside any repo (see model.Repo.Plain).
 func List(ctx context.Context) ([]model.Repo, error) {
+	home, _ := os.UserHomeDir()
 	var repos []model.Repo
 	seen := map[string]bool{}
 	add := func(p string) {
 		p = strings.TrimSpace(p)
-		if p == "" || seen[p] {
-			return
+		if p == "" || seen[p] || (home != "" && p == home) {
+			return // home is appended once, below, as the dedicated plain entry
 		}
 		if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
 			return
@@ -175,6 +178,11 @@ func List(ctx context.Context) ([]model.Repo, error) {
 	// still selectable (recents stay on top; the rest fill in alphabetically).
 	for _, p := range scanRepos(reposDir()) {
 		add(p)
+	}
+	if home != "" {
+		if fi, err := os.Stat(home); err == nil && fi.IsDir() {
+			repos = append(repos, model.Repo{Path: home, Name: "~", Plain: true})
+		}
 	}
 	return repos, nil
 }
