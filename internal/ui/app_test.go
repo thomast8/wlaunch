@@ -563,3 +563,36 @@ func TestSidebarUpWrapsToLastEntry(t *testing.T) {
 		t.Errorf("sideCur = %d after wrapping down from the last entry, want 0", m.sideCur)
 	}
 }
+
+// ←/→ form one ring across the sidebar and all four panel tabs: → always
+// crosses the sidebar boundary onto the first tab (PRs), ← always onto the
+// last (Actionable), so repeatedly pressing one direction visits every tab
+// exactly once before repeating.
+func TestArrowsRingWrapsThroughSidebarBothDirections(t *testing.T) {
+	m := loadedModel(t) // panel-focused, PRs (already entered once via →)
+
+	order := []model.View{model.ViewBranches, model.ViewWorktrees, model.ViewActionable}
+	for _, want := range order {
+		m = step(t, m, tea.KeyMsg{Type: tea.KeyRight})
+		if m.view != want || m.focus != focusMain {
+			t.Fatalf("after →: view=%v focus=%v, want %v/panel", m.view, m.focus, want)
+		}
+	}
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // Actionable (last) -> wraps out to the sidebar
+	if m.focus != focusSidebar {
+		t.Fatalf("focus = %v after → from the last tab, want sidebar", m.focus)
+	}
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyRight}) // sidebar -> wraps back in on the first tab
+	if m.view != model.ViewPRs || m.focus != focusMain {
+		t.Fatalf("after → from sidebar: view=%v focus=%v, want PRs/panel", m.view, m.focus)
+	}
+
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyLeft}) // PRs (first) -> wraps out to the sidebar
+	if m.focus != focusSidebar {
+		t.Fatalf("focus = %v after ← from the first tab, want sidebar", m.focus)
+	}
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyLeft}) // sidebar -> wraps back in on the last tab
+	if m.view != model.ViewActionable || m.focus != focusMain {
+		t.Fatalf("after ← from sidebar: view=%v focus=%v, want Actionable/panel", m.view, m.focus)
+	}
+}

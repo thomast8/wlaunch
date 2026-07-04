@@ -58,18 +58,19 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 
 The sidebar is focused on startup — `enter` (or `tab`, an alias) launches claude on
 the highlighted repo's main checkout with zero preamble, the fast path for "just jump
-into a repo." `→` moves into the panel to browse a repo's PRs/branches/worktrees/
-Actionable items; `Shift+Tab` steps back out to the sidebar from wherever you are in
-the panel.
+into a repo." `←`/`→` and the sidebar form one ring — sidebar · PRs · Branches ·
+Worktrees · Actionable · back to the sidebar — so either arrow key alone gets you
+anywhere, in either direction; `Shift+Tab` is a direct, instant shortcut back to the
+sidebar from wherever you are in the panel.
 
 | key | action |
 |-----|--------|
 | type any text | filter the current view live |
 | `esc` | clear the filter (does **not** quit) |
 | `↑` `↓` | move within the list (repos in the sidebar, rows in the panel). The sidebar wraps (↑ from the top jumps to the pinned-last `~`); panel rows clamp instead |
-| `←` / `→` (panel) | switch view (PRs · Branches · Worktrees · Actionable), wrapping around in either direction |
-| `→` (sidebar) | scope the panel to the highlighted repo and move into it to browse |
-| `Shift+Tab` (panel) | step focus back to the sidebar |
+| `←` / `→` (panel) | switch view (PRs · Branches · Worktrees · Actionable); → from the last tab and ← from the first wrap out to the sidebar |
+| `←` / `→` (sidebar) | scope the panel to the highlighted repo and move into it to browse — → lands on the first tab (PRs), ← on the last (Actionable) |
+| `Shift+Tab` (panel) | jump straight back to the sidebar from any tab |
 | `enter` / `tab` (sidebar) | launch claude on the repo's main checkout — the fast path when you just want to jump into a repo (same target as `;c` from the sidebar). `tab` is a plain alias of `enter`; it no longer toggles focus |
 | `enter` / `tab` (panel) | launch the selection in claude (the default action) |
 | `⌥enter` (Option+Enter, either focus) | same as `enter`, but launches codex instead of claude (Ctrl+Enter can't be detected by terminals as distinct from plain Enter, but Alt+Enter can) |

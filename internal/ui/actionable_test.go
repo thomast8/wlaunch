@@ -9,14 +9,15 @@ import (
 	"github.com/thomast8/wlaunch/internal/model"
 )
 
-// actionableModel enters the Actionable view (one KeyLeft from PRs, since
-// Actionable is the last view and the cycle wraps) and feeds it items as if the
-// async load completed. The load cmd returned on entry is discarded by step, so
-// no real gh call happens.
+// actionableModel enters the Actionable view via the ←/→ ring (PRs -> sidebar,
+// wrapping the leftmost tab out; sidebar -> Actionable, wrapping ← back in on
+// the last tab) and feeds it items as if the async load completed. The load
+// cmd returned on entry is discarded by step, so no real gh call happens.
 func actionableModel(t *testing.T, items []model.ActionItem) Model {
 	t.Helper()
 	m := loadedModel(t)
-	m = step(t, m, tea.KeyMsg{Type: tea.KeyLeft}) // PRs -> Actionable (wraps)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyLeft}) // PRs (leftmost) -> sidebar
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyLeft}) // sidebar -> Actionable (wraps to the last tab)
 	if m.view != model.ViewActionable {
 		t.Fatalf("view = %v, want Actionable", m.view)
 	}

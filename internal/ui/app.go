@@ -639,21 +639,31 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyTab, tea.KeyEnter:
 		// Tab is a plain alias of Enter (least-resistance launch from wherever focus
-		// already is), not a focus toggle — → is the only way into the panel, ← the
-		// only way back out. Alt+Enter (and Alt+Tab, for symmetry) launches codex
-		// instead of claude; see the Ctrl+O comment below for why a modifier key is
-		// the only reliable way to distinguish this from plain Enter.
+		// already is), not a focus toggle — ←/→ (below) move focus instead. Alt+Enter
+		// (and Alt+Tab, for symmetry) launches codex instead of claude; see the
+		// Ctrl+O comment below for why a modifier key is the only reliable way to
+		// distinguish this from plain Enter.
 		return m.launchFromKey(msg)
 	case tea.KeyShiftTab:
-		// The way back to the sidebar now that Tab launches instead of toggling.
-		// Left/Right stay pure view-cycling (they wrap all the way around,
-		// including through Actionable), so returning to the sidebar needed its
-		// own key rather than overloading Left at the first view.
+		// An instant, direction-independent way back to the sidebar from anywhere in
+		// the panel, alongside the full ←/→ ring below (which can take a few presses
+		// to get there from the middle of the tab strip).
 		m.focus = focusSidebar
 		return m, nil
 	case tea.KeyLeft:
+		// ←/→ form one ring: sidebar - PRs - Branches - Worktrees - Actionable - back
+		// to the sidebar. Crossing the sidebar boundary is deterministic (→ always
+		// lands on the first tab, ← on the last) rather than resuming whatever view
+		// was last shown, so repeatedly pressing one direction visits every tab
+		// exactly once before repeating — the same guarantee the 4 panel tabs
+		// already gave each other, extended to include the sidebar.
 		if m.focus == focusSidebar {
-			return m, nil // already at the leftmost pane; nothing further left
+			m.view = model.ViewActionable
+			return m, m.enterPanel()
+		}
+		if m.view == model.ViewPRs { // leftmost tab: ← wraps back out to the sidebar
+			m.focus = focusSidebar
+			return m, nil
 		}
 		m.view = m.view.Prev()
 		m.clampCursor()
@@ -661,7 +671,12 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyRight:
 		if m.focus == focusSidebar {
-			return m, m.enterPanel() // → from the sidebar = scope + browse the panel
+			m.view = model.ViewPRs
+			return m, m.enterPanel()
+		}
+		if m.view == model.ViewActionable { // rightmost tab: → wraps back out to the sidebar
+			m.focus = focusSidebar
+			return m, nil
 		}
 		m.view = m.view.Next()
 		m.clampCursor()
@@ -1514,9 +1529,9 @@ func (m Model) renderFooter(w int) string {
 		if m.filterStr != "" {
 			clear = "esc clear · "
 		}
-		nav := "type to filter · ↑↓ move · ←→ view · enter/tab claude · ⌥enter codex · ⇧enter shell · ⇧tab back · "
+		nav := "type to filter · ↑↓ move · ←→ view/sidebar · enter/tab claude · ⌥enter codex · ⇧enter shell · ⇧tab back · "
 		if m.focus == focusSidebar {
-			nav = "type to filter · ↑↓ repo · enter/tab claude · ⌥enter codex · ⇧enter shell · → browse · "
+			nav = "type to filter · ↑↓ repo · enter/tab claude · ⌥enter codex · ⇧enter shell · ←→ browse · "
 		}
 		hint = styHint.Render(clear+nav) +
 			styHeading.Render("; tools/actions") + styHint.Render(" · ^C quit")
