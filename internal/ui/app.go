@@ -78,7 +78,7 @@ type rowData struct {
 	repoRoot string
 	ref      string
 	filter   string
-	render   func(w int, selected, focused bool) string
+	render   func(w int, selected bool) string
 }
 
 // Model is the top-level Bubble Tea model.
@@ -135,6 +135,11 @@ type Model struct {
 
 	selection *model.Selection
 	quit      bool
+
+	// mainCheckout resolves a repo to its default branch and the checkout holding it.
+	// A field, not a direct call, so tests drive the launch and the new-worktree base
+	// placeholder without shelling out to git.
+	mainCheckout func(repo string) (branch, dir string)
 }
 
 // New builds the initial model.
@@ -148,13 +153,14 @@ func New() Model {
 	bi.Prompt = ""
 
 	return Model{
-		focus:     focusSidebar,
-		view:      model.ViewPRs,
-		spinner:   sp,
-		cache:     cache.Default(),
-		warmed:    map[string]bool{},
-		nameInput: ni,
-		baseInput: bi,
+		focus:        focusSidebar,
+		view:         model.ViewPRs,
+		spinner:      sp,
+		cache:        cache.Default(),
+		warmed:       map[string]bool{},
+		nameInput:    ni,
+		baseInput:    bi,
+		mainCheckout: gitMainCheckout,
 	}
 }
 
@@ -1147,8 +1153,7 @@ func (m Model) launchFromKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.launch(t)
 }
 
-// emitRepo launches a tool on the highlighted sidebar repo's root (the claude-here
-// case): kind=repo, empty ref.
+// emitRepo launches a tool on the highlighted sidebar repo (the claude-here case).
 func (m Model) emitRepo(t model.Target) (tea.Model, tea.Cmd) {
 	return m.emitRepoAt(m.sideCur, t)
 }
@@ -1156,16 +1161,26 @@ func (m Model) emitRepo(t model.Target) (tea.Model, tea.Cmd) {
 // emitRepoAt is emitRepo generalized to an explicit repos[] index, so a
 // panel-focused launch on a plain (non-git) scope can target the scoped repo
 // instead of the sidebar's highlighted one.
+//
+// A git repo resolves to the checkout holding its default branch, which is usually
+// a dedicated `main` worktree — the primary checkout is routinely parked on whatever
+// feature branch was last worked on there, so landing in it means landing off main.
+// That resolution emits kind=worktree so the wrapper cd's straight in. Kind stays
+// repo (the old repo-root target) for a plain entry, when the primary checkout is
+// itself on the default branch, and when nothing has the default branch checked out
+// — so an unresolvable repo degrades to the previous behavior instead of dead-ending.
 func (m Model) emitRepoAt(idx int, t model.Target) (tea.Model, tea.Cmd) {
 	if idx < 0 || idx >= len(m.repos) {
 		return m, nil
 	}
-	m.selection = &model.Selection{
-		Kind:     model.KindRepo,
-		RepoRoot: m.repos[idx].Path,
-		Ref:      "",
-		Tool:     t.Tool(),
+	repo := m.repos[idx]
+	sel := model.Selection{Kind: model.KindRepo, RepoRoot: repo.Path, Ref: "", Tool: t.Tool()}
+	if !repo.Plain && m.mainCheckout != nil {
+		if _, dir := m.mainCheckout(repo.Path); dir != "" && dir != repo.Path {
+			sel.Kind, sel.Ref = model.KindWorktree, dir
+		}
 	}
+	m.selection = &sel
 	return m, tea.Quit
 }
 
@@ -1217,25 +1232,16 @@ func (m Model) takenNames(idx int) map[string]bool {
 	return taken
 }
 
-// defaultBase is the branch shown as the stage-2 placeholder: the main checkout's
-// branch, else main/master if present, else "main". Only informational — an empty
-// base field emits an empty Base so worktree-setup.sh re-detects (and fetches)
-// origin's default; the placeholder just tells the user what that will be.
+// defaultBase is the branch shown as the stage-2 placeholder: the repo's default
+// branch, else "main". Only informational — an empty base field emits an empty Base so
+// worktree-setup.sh re-detects (and fetches) origin's default; the placeholder just
+// tells the user what that will be, so it has to resolve the default branch the same
+// way, and not — as it once did — report whatever branch the primary checkout is
+// parked on, which is exactly the branch you are NOT about to base a worktree on.
 func (m Model) defaultBase(idx int) string {
-	if idx == m.scopedIdx {
-		for _, wt := range m.worktrees {
-			if wt.IsMain && wt.Branch != "" {
-				return wt.Branch
-			}
-		}
-		has := map[string]bool{}
-		for _, b := range m.branches {
-			has[b.Name] = true
-		}
-		for _, name := range []string{"main", "master"} {
-			if has[name] {
-				return name
-			}
+	if idx >= 0 && idx < len(m.repos) && !m.repos[idx].Plain && m.mainCheckout != nil {
+		if branch, _ := m.mainCheckout(m.repos[idx].Path); branch != "" {
+			return branch
 		}
 	}
 	return "main"
@@ -1361,7 +1367,7 @@ func (m Model) rows(v model.View) []rowData {
 			out = append(out, rowData{
 				kind: model.KindPR, repoRoot: scoped, ref: fmt.Sprintf("%d", pr.Number),
 				filter: fmt.Sprintf("%d %s %s %s", pr.Number, pr.Title, pr.HeadRefName, pr.Author),
-				render: func(w int, sel, foc bool) string { return renderPRRow(pr, w, sel, foc) },
+				render: func(w int, sel bool) string { return renderPRRow(pr, w, sel) },
 			})
 		}
 		return out
@@ -1372,7 +1378,7 @@ func (m Model) rows(v model.View) []rowData {
 			out = append(out, rowData{
 				kind: model.KindBranch, repoRoot: scoped, ref: b.Name,
 				filter: b.Name + " " + b.Subject,
-				render: func(w int, sel, foc bool) string { return renderBranchRow(b, w, sel, foc) },
+				render: func(w int, sel bool) string { return renderBranchRow(b, w, sel) },
 			})
 		}
 		return out
@@ -1383,7 +1389,7 @@ func (m Model) rows(v model.View) []rowData {
 			out = append(out, rowData{
 				kind: model.KindWorktree, repoRoot: scoped, ref: wt.Path,
 				filter: wt.Path + " " + wt.Branch,
-				render: func(w int, sel, foc bool) string { return renderWorktreeRow(wt, w, sel, foc) },
+				render: func(w int, sel bool) string { return renderWorktreeRow(wt, w, sel) },
 			})
 		}
 		return out
@@ -1397,7 +1403,7 @@ func (m Model) rows(v model.View) []rowData {
 				// existing KindPR contract resolves cross-repo opens unchanged.
 				kind: model.KindPR, repoRoot: it.RepoRoot, ref: strconv.Itoa(it.Number),
 				filter: it.FilterText(),
-				render: func(w int, sel, foc bool) string { return renderActionableRow(it, showRepo, w, sel, foc) },
+				render: func(w int, sel bool) string { return renderActionableRow(it, showRepo, w, sel) },
 			})
 		}
 		return out
@@ -1561,7 +1567,7 @@ func (m Model) renderSidebar(w, h int) string {
 		label := padTrunc(marker+m.repos[i].Name, w)
 		switch {
 		case focused && i == m.sideCur:
-			rows = append(rows, rowStyle(true).Render(label))
+			rows = append(rows, rowStyle().Render(label))
 		case i == m.scopedIdx:
 			rows = append(rows, styHeading.Render(label))
 		default:
@@ -1612,6 +1618,10 @@ func (m Model) renderPanel(w, h int) string {
 	return renderer.NewStyle().Width(w).Height(h).MaxWidth(w).Render(content)
 }
 
+// renderList draws the visible window of rows. Only the FOCUSED pane marks its
+// cursor row: an unfocused panel drawing a highlight bar reads as "this is what
+// Enter opens", when a sidebar-focused Enter actually launches the sidebar's repo.
+// The cursor position itself is kept, so it reappears on arrowing back in.
 func renderList(rows []rowData, cursor, w, h int, focused bool) string {
 	if h < 1 {
 		h = 1
@@ -1619,7 +1629,7 @@ func renderList(rows []rowData, cursor, w, h int, focused bool) string {
 	start := windowStart(cursor, h, len(rows))
 	var lines []string
 	for i := start; i < start+h && i < len(rows); i++ {
-		lines = append(lines, rows[i].render(w, i == cursor, focused))
+		lines = append(lines, rows[i].render(w, focused && i == cursor))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1640,7 +1650,7 @@ func emptyMsg(v model.View) string {
 
 // --- per-row renderers: fixed-width columns summing to exactly w (no wrap) ---
 
-func renderPRRow(pr model.PR, w int, selected, focused bool) string {
+func renderPRRow(pr model.PR, w int, selected bool) string {
 	numCol := padTrunc(fmt.Sprintf("#%d", pr.Number), 5)
 	avail := w - 2 - 5 - 2
 	if avail < 16 {
@@ -1653,12 +1663,12 @@ func renderPRRow(pr model.PR, w int, selected, focused bool) string {
 	branchCol := padTrunc("⎇ "+pr.HeadRefName, branchW)
 	authorCol := padTrunc("@"+pr.Author, authorW)
 	if selected {
-		return rowStyle(focused).Render("▸ " + numCol + titleCol + " " + branchCol + " " + authorCol)
+		return rowStyle().Render("▸ " + numCol + titleCol + " " + branchCol + " " + authorCol)
 	}
 	return "  " + styNum.Render(numCol) + styText.Render(titleCol) + " " + styMeta.Render(branchCol+" "+authorCol)
 }
 
-func renderBranchRow(b model.Branch, w int, selected, focused bool) string {
+func renderBranchRow(b model.Branch, w int, selected bool) string {
 	avail := w - 2 - 3
 	if avail < 20 {
 		avail = 20
@@ -1674,7 +1684,7 @@ func renderBranchRow(b model.Branch, w int, selected, focused bool) string {
 	dateCol := padTrunc(relTime(b.LastCommitUnix), dateW)
 	subjCol := padTrunc(b.Subject, subjW)
 	if selected {
-		return rowStyle(focused).Render("▸ " + nameCol + " " + trackCol + " " + dateCol + " " + subjCol)
+		return rowStyle().Render("▸ " + nameCol + " " + trackCol + " " + dateCol + " " + subjCol)
 	}
 	nameRender := styText.Render(nameCol)
 	if b.IsCurrent {
@@ -1699,7 +1709,7 @@ func branchTrack(b model.Branch) string {
 	return "local" // no upstream: a local-only branch (nothing to pull; cleanup safe-deletes)
 }
 
-func renderWorktreeRow(wt model.Worktree, w int, selected, focused bool) string {
+func renderWorktreeRow(wt model.Worktree, w int, selected bool) string {
 	avail := w - 2 - 3
 	if avail < 20 {
 		avail = 20
@@ -1733,7 +1743,7 @@ func renderWorktreeRow(wt model.Worktree, w int, selected, focused bool) string 
 	headCol := padTrunc(wt.HEAD, headW)
 	badgeCol := padTrunc(strings.Join(badges, " "), badgeW)
 	if selected {
-		return rowStyle(focused).Render("▸ " + nameCol + " " + branchCol + " " + headCol + " " + badgeCol)
+		return rowStyle().Render("▸ " + nameCol + " " + branchCol + " " + headCol + " " + badgeCol)
 	}
 	return "  " + styText.Render(nameCol) + " " + styMeta.Render(branchCol) + " " + styMeta.Render(headCol) + " " + styMeta.Render(badgeCol)
 }
@@ -1753,7 +1763,7 @@ func markerStyle(it model.ActionItem) lipgloss.Style {
 
 // renderActionableRow lays out: marker · #num · summary · [repo] · title. In
 // all-repos scope a repo column is shown so cross-repo items are distinguishable.
-func renderActionableRow(it model.ActionItem, showRepo bool, w int, selected, focused bool) string {
+func renderActionableRow(it model.ActionItem, showRepo bool, w int, selected bool) string {
 	markerCol := padTrunc(it.Marker, 2)
 	numCol := padTrunc(fmt.Sprintf("#%d", it.Number), 6)
 	avail := w - 2 - 2 - 6 // leading 2 + marker 2 + num 6
@@ -1776,7 +1786,7 @@ func renderActionableRow(it model.ActionItem, showRepo bool, w int, selected, fo
 		repoCol = padTrunc(it.RepoName, repoW) + " "
 	}
 	if selected {
-		return rowStyle(focused).Render("▸ " + markerCol + numCol + sumCol + " " + repoCol + titleCol)
+		return rowStyle().Render("▸ " + markerCol + numCol + sumCol + " " + repoCol + titleCol)
 	}
 	ms := markerStyle(it)
 	return "  " + ms.Render(markerCol) + styNum.Render(numCol) + ms.Render(sumCol) + " " +

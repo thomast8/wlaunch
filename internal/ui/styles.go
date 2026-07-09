@@ -52,8 +52,6 @@ var (
 	colHint        = lipgloss.AdaptiveColor{Dark: "244", Light: "243"} // footer hints
 	colTabInactive = lipgloss.AdaptiveColor{Dark: "250", Light: "242"} // inactive tabs
 	colErr         = lipgloss.AdaptiveColor{Dark: "203", Light: "160"} // error states
-	colSelBg       = lipgloss.Color("238")                             // selected row, unfocused pane
-	colSelFg       = lipgloss.Color("231")                             // near-white on selection
 )
 
 var (
@@ -70,13 +68,11 @@ var (
 	styTabInactive = renderer.NewStyle().Foreground(colTabInactive)
 )
 
-// rowStyle is the highlight bar for the selected row: a strong accent bar in the
-// focused pane, a subtle grey bar in the unfocused one.
-func rowStyle(focused bool) lipgloss.Style {
-	if focused {
-		return renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccentBg).Bold(true)
-	}
-	return renderer.NewStyle().Foreground(colSelFg).Background(colSelBg)
+// rowStyle is the highlight bar for the cursor row: an accent bar, drawn only by
+// the pane that has focus. An unfocused pane draws no cursor row at all, so exactly
+// one selection is visible at a time — the one Enter acts on.
+func rowStyle() lipgloss.Style {
+	return renderer.NewStyle().Foreground(lipgloss.Color("16")).Background(colAccentBg).Bold(true)
 }
 
 // truncate shortens s to at most n display runes, adding an ellipsis when cut.

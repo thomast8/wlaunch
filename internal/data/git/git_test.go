@@ -1,6 +1,14 @@
 package git
 
-import "testing"
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/thomast8/wlaunch/internal/model"
+)
 
 func TestParseBranches(t *testing.T) {
 	// fields: name \t upstream \t track \t unix \t HEAD \t subject
@@ -68,5 +76,166 @@ func TestParseWorktrees(t *testing.T) {
 	}
 	if !wts[2].Detached || wts[2].Branch != "" {
 		t.Errorf("wt2 = %+v, want detached/no-branch", wts[2])
+	}
+}
+
+func TestDefaultBranchFromOriginHead(t *testing.T) {
+	cases := map[string]string{
+		"origin/main\n":       "main",
+		"origin/master":       "master",
+		"origin/release/v2\n": "release/v2", // slashes inside the name survive
+		"main":                "main",       // no remote prefix at all
+		"":                    "",
+		"  \n":                "",
+	}
+	for in, want := range cases {
+		if got := defaultBranchFromOriginHead([]byte(in)); got != want {
+			t.Errorf("defaultBranchFromOriginHead(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The default branch usually lives in a dedicated worktree, not the primary
+// checkout — which is routinely parked on a feature branch.
+func TestLiveWorktreeForBranch(t *testing.T) {
+	wts := []model.Worktree{
+		{Path: "/r", Branch: "feat/x", IsMain: true},
+		{Path: "/wt/r/main", Branch: "main"},
+		{Path: "/wt/r/detached", Detached: true},
+	}
+	if got := liveWorktreeForBranch(wts, "main"); got != "/wt/r/main" {
+		t.Errorf("liveWorktreeForBranch(main) = %q, want /wt/r/main", got)
+	}
+	if got := liveWorktreeForBranch(wts, "feat/x"); got != "/r" {
+		t.Errorf("liveWorktreeForBranch(feat/x) = %q, want /r (the primary checkout)", got)
+	}
+	if got := liveWorktreeForBranch(wts, "nope"); got != "" {
+		t.Errorf("liveWorktreeForBranch(nope) = %q, want empty", got)
+	}
+	// An unresolvable default branch must not match the detached worktree's empty Branch.
+	if got := liveWorktreeForBranch(wts, ""); got != "" {
+		t.Errorf("liveWorktreeForBranch(\"\") = %q, want empty", got)
+	}
+	// A worktree git still lists but whose directory is gone must not be handed back:
+	// the caller would cd into a path that doesn't exist.
+	stale := []model.Worktree{
+		{Path: "/r", Branch: "feat/x", IsMain: true},
+		{Path: "/wt/r/main", Branch: "main", Prunable: true},
+	}
+	if got := liveWorktreeForBranch(stale, "main"); got != "" {
+		t.Errorf("liveWorktreeForBranch on a prunable worktree = %q, want empty", got)
+	}
+}
+
+// --- MainCheckout against real git, in throwaway repos ---
+
+func gitT(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.t",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// newRepo builds a repo whose primary checkout sits on `parked`, with `main` present.
+func newRepo(t *testing.T, parked string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := filepath.Join(t.TempDir(), "root")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, root, "init", "-q", "-b", "main")
+	// git reports canonical (symlink-resolved) paths; TempDir on macOS is under
+	// /var -> /private/var, so canonicalize here to compare against git's output.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	gitT(t, root, "commit", "-q", "--allow-empty", "-m", "init")
+	if parked != "main" {
+		gitT(t, root, "checkout", "-q", "-b", parked)
+	}
+	return root
+}
+
+// The headline case: the primary checkout is parked on a feature branch and a separate
+// worktree holds the default branch. MainCheckout must point at that worktree.
+func TestMainCheckoutPrefersTheDefaultBranchWorktree(t *testing.T) {
+	root := newRepo(t, "feat/parked")
+	wt := filepath.Join(filepath.Dir(root), "mainwt")
+	gitT(t, root, "worktree", "add", "-q", wt, "main")
+
+	branch, dir := MainCheckout(context.Background(), root)
+	if branch != "main" {
+		t.Errorf("branch = %q, want main", branch)
+	}
+	if dir != wt {
+		t.Errorf("dir = %q, want %q", dir, wt)
+	}
+}
+
+// No second worktree: the primary checkout already holds the default branch, so dir is
+// the root and the caller emits its plain repo-root contract.
+func TestMainCheckoutReturnsTheRootWhenItHoldsTheDefaultBranch(t *testing.T) {
+	root := newRepo(t, "main")
+	branch, dir := MainCheckout(context.Background(), root)
+	if branch != "main" || dir != root {
+		t.Errorf("MainCheckout = (%q, %q), want (main, %q)", branch, dir, root)
+	}
+}
+
+// Regression guard: `rm -rf` on a worktree leaves git listing it, still recorded on
+// `main`, flagged prunable. Handing that path back makes the wl wrapper abort with
+// "could not resolve directory" — strictly worse than the repo-root fallback it replaced.
+func TestMainCheckoutSkipsAWorktreeWhoseDirectoryIsGone(t *testing.T) {
+	root := newRepo(t, "feat/parked")
+	wt := filepath.Join(filepath.Dir(root), "mainwt")
+	gitT(t, root, "worktree", "add", "-q", wt, "main")
+	if err := os.RemoveAll(wt); err != nil { // deleted WITHOUT `git worktree remove`
+		t.Fatal(err)
+	}
+
+	branch, dir := MainCheckout(context.Background(), root)
+	if branch != "main" {
+		t.Errorf("branch = %q, want main (it still resolves; only the checkout is gone)", branch)
+	}
+	if dir != "" {
+		t.Errorf("dir = %q, want empty so the caller falls back to the repo root", dir)
+	}
+}
+
+// A repo with no origin/HEAD, no main and no master has no default branch to resolve.
+func TestMainCheckoutOnARepoWithNoDefaultBranch(t *testing.T) {
+	root := newRepo(t, "main")
+	gitT(t, root, "checkout", "-q", "-b", "develop")
+	gitT(t, root, "branch", "-q", "-D", "main")
+
+	branch, dir := MainCheckout(context.Background(), root)
+	if branch != "" || dir != "" {
+		t.Errorf("MainCheckout = (%q, %q), want both empty", branch, dir)
+	}
+}
+
+// origin/HEAD wins over the main/master probes, and a slashed default branch survives.
+func TestMainCheckoutHonorsOriginHEADIncludingSlashedNames(t *testing.T) {
+	root := newRepo(t, "main")
+	gitT(t, root, "checkout", "-q", "-b", "release/v2")
+	gitT(t, root, "update-ref", "refs/remotes/origin/release/v2", "HEAD")
+	gitT(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/v2")
+
+	branch, dir := MainCheckout(context.Background(), root)
+	if branch != "release/v2" {
+		t.Errorf("branch = %q, want release/v2 (origin/HEAD beats the main fallback)", branch)
+	}
+	if dir != root {
+		t.Errorf("dir = %q, want %q", dir, root)
 	}
 }

@@ -134,6 +134,17 @@ func loadWorktreesCmd(repo string, gen uint64) tea.Cmd {
 	}
 }
 
+// gitMainCheckout resolves a repo's default branch and the checkout holding it.
+// Unlike every other data call in this file it is synchronous rather than a tea.Cmd:
+// it runs on the launch keypress, one frame before the program quits, so there is no
+// later frame for a message to land in. Both git probes are local ref reads against an
+// already-open repo (~50ms), and the context bounds the pathological case.
+func gitMainCheckout(repo string) (branch, dir string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return git.MainCheckout(ctx, repo)
+}
+
 func prefetchRepoTabsCmd(store *cache.Store, repo string) tea.Cmd {
 	if repo == "" {
 		return nil

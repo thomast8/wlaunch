@@ -21,7 +21,7 @@ func TestStylesEmitANSIWhenColorAvailable(t *testing.T) {
 		"styNum":     styNum.Render("x"),
 		"styMeta":    styMeta.Render("x"),
 		"tabActive":  styTabActive.Render("x"),
-		"rowFocused": rowStyle(true).Render("x"),
+		"rowFocused": rowStyle().Render("x"),
 	}
 	for name, out := range cases {
 		if !strings.Contains(out, "\x1b[") {
