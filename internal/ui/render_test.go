@@ -17,7 +17,7 @@ import (
 // names that previously wrapped onto a second line.
 func realisticModel(t *testing.T, w, h int) Model {
 	t.Helper()
-	m := stubMain(New(), nil)
+	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: w, Height: h})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{

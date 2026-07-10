@@ -57,11 +57,9 @@ a mode. Tools and actions live behind a `;` leader, so the letters stay free for
 `esc` clears the filter (it never quits); `Ctrl+C` is the only quit.
 
 The sidebar is focused on startup — `enter` (or `tab`, an alias) launches claude on
-the highlighted repo's default branch with zero preamble, the fast path for "just jump
-into a repo." That means the worktree holding the default branch (`origin/HEAD`, else
-`main`, else `master`) when one exists, not the primary checkout, which tends to sit
-on whatever feature branch was last worked on there. The other sidebar launchers
-(`;l`, `;s`, `;o`, `;x`) resolve to the same worktree.
+the highlighted repo's primary checkout with zero preamble, the fast path for "just
+jump into a repo." The shell dispatcher safely reconciles that checkout onto the
+default branch before launching, so Claude and Codex use the same ownership policy.
 `←`/`→` and the sidebar form one ring — sidebar · PRs · Branches ·
 Worktrees · Actionable · back to the sidebar — so either arrow key alone gets you
 anywhere, in either direction; `Shift+Tab` is a direct, instant shortcut back to the
@@ -79,12 +77,12 @@ it just stops drawing it — and re-marks the same row when you arrow back in.
 | `←` / `→` (panel) | switch view (PRs · Branches · Worktrees · Actionable); → from the last tab and ← from the first wrap out to the sidebar |
 | `←` / `→` (sidebar) | scope the panel to the highlighted repo and move into it to browse — → lands on the first tab (PRs), ← on the last (Actionable) |
 | `Shift+Tab` (panel) | jump straight back to the sidebar from any tab |
-| `enter` / `tab` (sidebar) | launch claude on the repo's default branch — the worktree holding it (`origin/HEAD`, else `main`, else `master`) if there is one, else the repo root. The fast path when you just want to jump into a repo (same target as `;c` from the sidebar). `tab` is a plain alias of `enter`; it no longer toggles focus |
+| `enter` / `tab` (sidebar) | launch claude through the repo's primary checkout. The shell dispatcher safely reconciles it onto the default branch first. This is the fast path when you just want to jump into a repo (same target as `;c` from the sidebar). `tab` is a plain alias of `enter`; it no longer toggles focus |
 | `enter` / `tab` (panel) | launch the selection in claude (the default action) |
 | `⌥enter` (Option+Enter, either focus) | same as `enter`, but launches codex instead of claude (Ctrl+Enter can't be detected by terminals as distinct from plain Enter, but Alt+Enter can) |
 | `⇧enter` (Shift+Enter, either focus) | same as `enter`, but opens a plain shell instead of claude. Terminals deliver Shift+Enter as the same byte as `Ctrl+J`, so pressing literal Ctrl+J does this too — harmless, just worth knowing |
 | `Ctrl+O` (either focus) | the same shell launch as `⇧enter` — an always-works alias that doesn't depend on how a given terminal encodes Shift+Enter (`o` = open) |
-| `;` then `c` `l` `s` `o` `x` | open the selection (or, from the sidebar, the repo's default-branch worktree — same resolution as `enter`) in claude / lazygit / serie / a plain shell / codex — `;x` is the always-works fallback for codex regardless of whether `⌥enter` reaches your terminal |
+| `;` then `c` `l` `s` `o` `x` | open the selection (or, from the sidebar, the safely reconciled primary checkout) in claude / lazygit / serie / a plain shell / codex — `;x` is the always-works fallback for codex regardless of whether `⌥enter` reaches your terminal |
 | `;` then `n` (any view) | create a new-branch worktree in the scoped repo (or the highlighted sidebar repo). Two-stage prompt: a **name** (placeholder is a random `adjective-noun` slug — empty Enter takes it) then a **base** to branch from (placeholder is the repo's detected default branch — empty Enter lets the script auto-detect origin's default). So two Enters = "random name off the default branch" |
 | `;` then `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
 | `;` then `p` (branches) | pull / fast-forward the selected branch (ff-only, safe; in-place for checked-out branches) |

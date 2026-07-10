@@ -54,7 +54,7 @@ func typeStr(t *testing.T, m Model, s string) Model {
 // from this model's PRs view (the leftmost) to step back out to the sidebar.
 func loadedModel(t *testing.T) Model {
 	t.Helper()
-	m := stubMain(New(), map[string]mainRef{"/r": {branch: "main", dir: "/r"}})
+	m := stubDefault(New(), map[string]string{"/r": "main"})
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -78,7 +78,7 @@ func loadedModel(t *testing.T) Model {
 // scope-on-panel-focus path (sideCur can then differ from scopedIdx).
 func twoRepoModel(t *testing.T) Model {
 	t.Helper()
-	m := stubMain(New(), nil)
+	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{
@@ -250,7 +250,7 @@ func TestSwitchToBranchesAndPick(t *testing.T) {
 
 // The sidebar is the startup default (New()), so this needs no navigation at all.
 func TestSidebarLaunchesRepoRoot(t *testing.T) {
-	m := stubMain(New(), nil)
+	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -268,7 +268,7 @@ func TestSidebarLaunchesRepoRoot(t *testing.T) {
 // checkout (kind=repo, empty ref), the same target ';c' produces from the sidebar.
 // The sidebar is the startup default, so plain Enter fires with zero preamble.
 func TestSidebarEnterLaunchesClaudeOnMain(t *testing.T) {
-	m := stubMain(New(), nil)
+	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -285,7 +285,7 @@ func TestSidebarEnterLaunchesClaudeOnMain(t *testing.T) {
 // Tab is a plain alias of Enter, so it launches the same repo-root pick as Enter —
 // it no longer focuses the sidebar (already the startup default) or moves into it.
 func TestSidebarTabLaunchesRepoRootLikeEnter(t *testing.T) {
-	m := stubMain(New(), nil) // nothing has the default branch: fall back to the root
+	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -307,7 +307,7 @@ func TestAltEnterLaunchesCodex(t *testing.T) {
 }
 
 func TestAltEnterFromSidebarLaunchesCodexOnRepoRoot(t *testing.T) {
-	m := stubMain(New(), nil)
+	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -597,25 +597,17 @@ func TestArrowsRingWrapsThroughSidebarBothDirections(t *testing.T) {
 	}
 }
 
-// mainRef is a stubbed repo resolution: the default branch and the checkout holding it.
-type mainRef struct{ branch, dir string }
-
-// stubMain replaces the git default-branch lookup with a repo->mainRef table, so no ui
-// test shells out. A missing entry means "the default branch doesn't resolve", the
-// fallback case. Per-Model, matching the m.cache seam.
-func stubMain(m Model, refs map[string]mainRef) Model {
-	m.mainCheckout = func(repo string) (string, string) {
-		r := refs[repo]
-		return r.branch, r.dir
-	}
+// stubDefault replaces the git default-branch lookup with a repo->branch table, so no
+// UI test shells out. A missing entry means the default branch does not resolve.
+func stubDefault(m Model, refs map[string]string) Model {
+	m.defaultBranch = func(repo string) string { return refs[repo] }
 	return m
 }
 
-// The whole point of the sidebar's Enter: land on the repo's default branch. The
-// primary checkout is usually parked on a feature branch, so the pick is the
-// worktree that actually holds main, emitted as kind=worktree for the wrapper to cd into.
-func TestSidebarEnterLaunchesTheDefaultBranchWorktree(t *testing.T) {
-	m := stubMain(New(), map[string]mainRef{"/r": {branch: "main", dir: "/wt/r/main"}})
+// Sidebar launches always hand the primary checkout to the shell dispatcher. That
+// shared layer reconciles the default branch for both Claude and Codex.
+func TestSidebarEnterAlwaysEmitsThePrimaryCheckout(t *testing.T) {
+	m := stubDefault(New(), map[string]string{"/r": "main"})
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -624,16 +616,13 @@ func TestSidebarEnterLaunchesTheDefaultBranchWorktree(t *testing.T) {
 	if sel == nil {
 		t.Fatal("sidebar enter should launch")
 	}
-	if got, want := sel.Encode(), "v1\tworktree\t/r\t/wt/r/main\tclaude\t\n"; got != want {
+	if got, want := sel.Encode(), "v1\trepo\t/r\t\tclaude\t\n"; got != want {
 		t.Errorf("Encode() = %q, want %q", got, want)
 	}
 }
 
-// When the primary checkout IS on the default branch there is no second worktree to
-// prefer, so the pick stays the plain repo-root contract rather than a redundant
-// kind=worktree naming the same directory.
 func TestSidebarEnterOnDefaultBranchRootEmitsRepoKind(t *testing.T) {
-	m := stubMain(New(), map[string]mainRef{"/r": {branch: "main", dir: "/r"}})
+	m := stubDefault(New(), map[string]string{"/r": "main"})
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -644,12 +633,12 @@ func TestSidebarEnterOnDefaultBranchRootEmitsRepoKind(t *testing.T) {
 	}
 }
 
-// The "~" home entry is not a git repo, so it must never be probed for a default
-// branch — it launches on itself.
+// A repo launch does not resolve branches inside the TUI; it launches on the primary
+// path and leaves canonical reconciliation to the shell dispatcher.
 func TestSidebarEnterOnPlainEntrySkipsGitAndEmitsRepoKind(t *testing.T) {
 	probed := false
 	m := New()
-	m.mainCheckout = func(string) (string, string) { probed = true; return "main", "/nope" }
+	m.defaultBranch = func(string) string { probed = true; return "main" }
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/home/t", Name: "~", Plain: true}}})
@@ -663,16 +652,15 @@ func TestSidebarEnterOnPlainEntrySkipsGitAndEmitsRepoKind(t *testing.T) {
 	}
 }
 
-// ;c from the sidebar shares emitRepo, so it resolves the default branch the same way.
-func TestSidebarLeaderClaudeAlsoTargetsTheDefaultBranchWorktree(t *testing.T) {
-	m := stubMain(New(), map[string]mainRef{"/r": {branch: "main", dir: "/wt/r/main"}})
+func TestSidebarLeaderClaudeAlsoTargetsThePrimaryCheckout(t *testing.T) {
+	m := stubDefault(New(), map[string]string{"/r": "main"})
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
 	m = leader(t, m, "c")
 	sel := m.Selection()
-	if sel == nil || sel.Kind != model.KindWorktree || sel.Ref != "/wt/r/main" {
-		t.Errorf("sidebar ;c = %+v, want worktree //wt/r/main", sel)
+	if sel == nil || sel.Kind != model.KindRepo || sel.RepoRoot != "/r" || sel.Ref != "" {
+		t.Errorf("sidebar ;c = %+v, want repo /r with an empty ref", sel)
 	}
 }
 
@@ -681,7 +669,7 @@ func TestSidebarLeaderClaudeAlsoTargetsTheDefaultBranchWorktree(t *testing.T) {
 // feature branch — the one thing the new worktree is certainly not based on (an empty
 // field makes worktree-setup.sh branch from origin's default).
 func TestNewWorktreeBasePlaceholderIsTheDefaultBranchNotTheParkedOne(t *testing.T) {
-	m := stubMain(New(), map[string]mainRef{"/r": {branch: "main", dir: "/wt/r/main"}})
+	m := stubDefault(New(), map[string]string{"/r": "main"})
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
@@ -698,7 +686,7 @@ func TestNewWorktreeBasePlaceholderIsTheDefaultBranchNotTheParkedOne(t *testing.
 
 // A repo whose default branch can't be resolved still offers a usable placeholder.
 func TestNewWorktreeBasePlaceholderFallsBackToMain(t *testing.T) {
-	m := stubMain(New(), nil)
+	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})

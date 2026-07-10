@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -143,65 +142,26 @@ func defaultBranchFromOriginHead(b []byte) string {
 	return s
 }
 
-// defaultBranch names the repo's default branch: origin/HEAD's target when the ref
+// DefaultBranch names the repo's default branch: origin/HEAD's target when the ref
 // is set locally, else main, else master. Returns "" when none of those resolve.
 // Every probe is a local ref read — no network.
-func defaultBranch(ctx context.Context, repo string) string {
+func DefaultBranch(ctx context.Context, repo string) string {
 	if b, err := data.Run(ctx, repo, "git", "-C", repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		if name := defaultBranchFromOriginHead(b); name != "" {
-			return name
+			if _, err := data.Run(ctx, repo, "git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+name); err == nil {
+				return name
+			}
 		}
 	}
 	for _, name := range []string{"main", "master"} {
 		if _, err := data.Run(ctx, repo, "git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+name); err == nil {
 			return name
 		}
-	}
-	return ""
-}
-
-// liveWorktreeForBranch finds the checkout holding branch, or "" if none does.
-// Prunable entries are skipped: git keeps listing a worktree whose directory was
-// deleted without `git worktree remove`, and its recorded branch still matches, so
-// a bare name match would hand back a path that isn't there any more.
-func liveWorktreeForBranch(wts []model.Worktree, branch string) string {
-	if branch == "" {
-		return ""
-	}
-	for _, wt := range wts {
-		if wt.Branch == branch && !wt.Prunable {
-			return wt.Path
+		if _, err := data.Run(ctx, repo, "git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+name); err == nil {
+			return name
 		}
 	}
 	return ""
-}
-
-// MainCheckout resolves a repo's default branch and the directory holding it. dir is
-// often a dedicated `main` worktree rather than the primary checkout, which tends to
-// sit on whatever feature branch was last worked on there.
-//
-// dir is "" when the branch resolves but no live checkout has it — and the stat guard
-// means "live" covers more than the prunable flag does: a locked worktree on unmounted
-// media is listed, unflagged, and gone. Callers fall back to the repo root on "", so
-// every failure here degrades to a directory that exists rather than a dead end.
-// branch is returned independently of dir, since it is still the right base to branch
-// from even when nothing has it checked out.
-func MainCheckout(ctx context.Context, repo string) (branch, dir string) {
-	branch = defaultBranch(ctx, repo)
-	if branch == "" {
-		return "", ""
-	}
-	wts, err := ListWorktrees(ctx, repo)
-	if err != nil {
-		return branch, ""
-	}
-	dir = liveWorktreeForBranch(wts, branch)
-	if dir != "" {
-		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-			return branch, ""
-		}
-	}
-	return branch, dir
 }
 
 // RemoveWorktree removes a worktree (its working dir + admin link). With force=false

@@ -136,10 +136,9 @@ type Model struct {
 	selection *model.Selection
 	quit      bool
 
-	// mainCheckout resolves a repo to its default branch and the checkout holding it.
-	// A field, not a direct call, so tests drive the launch and the new-worktree base
-	// placeholder without shelling out to git.
-	mainCheckout func(repo string) (branch, dir string)
+	// defaultBranch resolves a repo's default branch. A field, not a direct call, so
+	// tests can drive the new-worktree base placeholder without shelling out to git.
+	defaultBranch func(repo string) string
 }
 
 // New builds the initial model.
@@ -153,14 +152,14 @@ func New() Model {
 	bi.Prompt = ""
 
 	return Model{
-		focus:        focusSidebar,
-		view:         model.ViewPRs,
-		spinner:      sp,
-		cache:        cache.Default(),
-		warmed:       map[string]bool{},
-		nameInput:    ni,
-		baseInput:    bi,
-		mainCheckout: gitMainCheckout,
+		focus:         focusSidebar,
+		view:          model.ViewPRs,
+		spinner:       sp,
+		cache:         cache.Default(),
+		warmed:        map[string]bool{},
+		nameInput:     ni,
+		baseInput:     bi,
+		defaultBranch: gitDefaultBranch,
 	}
 }
 
@@ -1162,25 +1161,19 @@ func (m Model) emitRepo(t model.Target) (tea.Model, tea.Cmd) {
 // panel-focused launch on a plain (non-git) scope can target the scoped repo
 // instead of the sidebar's highlighted one.
 //
-// A git repo resolves to the checkout holding its default branch, which is usually
-// a dedicated `main` worktree — the primary checkout is routinely parked on whatever
-// feature branch was last worked on there, so landing in it means landing off main.
-// That resolution emits kind=worktree so the wrapper cd's straight in. Kind stays
-// repo (the old repo-root target) for a plain entry, when the primary checkout is
-// itself on the default branch, and when nothing has the default branch checked out
-// — so an unresolvable repo degrades to the previous behavior instead of dead-ending.
+// Repo launches always emit the primary checkout. The shell dispatcher owns canonical
+// default-branch reconciliation so Claude and Codex use one policy, while branch and
+// PR selections continue to emit their shared worktree targets.
 func (m Model) emitRepoAt(idx int, t model.Target) (tea.Model, tea.Cmd) {
 	if idx < 0 || idx >= len(m.repos) {
 		return m, nil
 	}
-	repo := m.repos[idx]
-	sel := model.Selection{Kind: model.KindRepo, RepoRoot: repo.Path, Ref: "", Tool: t.Tool()}
-	if !repo.Plain && m.mainCheckout != nil {
-		if _, dir := m.mainCheckout(repo.Path); dir != "" && dir != repo.Path {
-			sel.Kind, sel.Ref = model.KindWorktree, dir
-		}
+	m.selection = &model.Selection{
+		Kind:     model.KindRepo,
+		RepoRoot: m.repos[idx].Path,
+		Ref:      "",
+		Tool:     t.Tool(),
 	}
-	m.selection = &sel
 	return m, tea.Quit
 }
 
@@ -1239,8 +1232,8 @@ func (m Model) takenNames(idx int) map[string]bool {
 // way, and not — as it once did — report whatever branch the primary checkout is
 // parked on, which is exactly the branch you are NOT about to base a worktree on.
 func (m Model) defaultBase(idx int) string {
-	if idx >= 0 && idx < len(m.repos) && !m.repos[idx].Plain && m.mainCheckout != nil {
-		if branch, _ := m.mainCheckout(m.repos[idx].Path); branch != "" {
+	if idx >= 0 && idx < len(m.repos) && !m.repos[idx].Plain && m.defaultBranch != nil {
+		if branch := m.defaultBranch(m.repos[idx].Path); branch != "" {
 			return branch
 		}
 	}
