@@ -43,6 +43,7 @@ const (
 	TargetDefault Target = iota
 	TargetClaude
 	TargetCodex
+	TargetCodexDesktop
 	TargetLazygit
 	TargetSerie
 	TargetShell
@@ -54,6 +55,8 @@ func (t Target) Tool() string {
 	switch t {
 	case TargetCodex:
 		return "codex"
+	case TargetCodexDesktop:
+		return "codex-desktop"
 	case TargetLazygit:
 		return "lazygit"
 	case TargetSerie:

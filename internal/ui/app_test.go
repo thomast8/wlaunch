@@ -296,25 +296,25 @@ func TestSidebarTabLaunchesRepoRootLikeEnter(t *testing.T) {
 	}
 }
 
-// Alt+Enter launches codex instead of claude, from either focus.
-func TestAltEnterLaunchesCodex(t *testing.T) {
+// Alt+Enter opens Codex Desktop instead of Claude, from either focus.
+func TestAltEnterLaunchesCodexDesktop(t *testing.T) {
 	m := loadedModel(t) // panel-focused, PR #289 under the cursor
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	sel := m.Selection()
-	if sel == nil || sel.Kind != model.KindPR || sel.Ref != "289" || sel.Tool != "codex" {
-		t.Errorf("alt+enter panel launch = %+v, want PR #289/codex", sel)
+	if sel == nil || sel.Kind != model.KindPR || sel.Ref != "289" || sel.Tool != "codex-desktop" {
+		t.Errorf("alt+enter panel launch = %+v, want PR #289/codex-desktop", sel)
 	}
 }
 
-func TestAltEnterFromSidebarLaunchesCodexOnRepoRoot(t *testing.T) {
+func TestAltEnterFromSidebarLaunchesCodexDesktopOnRepoRoot(t *testing.T) {
 	m := stubDefault(New(), nil)
 	m.cache = nil
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = step(t, m, reposLoadedMsg{repos: []model.Repo{{Path: "/r", Name: "r"}}})
 	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
 	sel := m.Selection()
-	if sel == nil || sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" || sel.Tool != "codex" {
-		t.Errorf("alt+enter sidebar launch = %+v, want repo/codex on /r", sel)
+	if sel == nil || sel.Kind != model.KindRepo || sel.Ref != "" || sel.RepoRoot != "/r" || sel.Tool != "codex-desktop" {
+		t.Errorf("alt+enter sidebar launch = %+v, want repo/codex-desktop on /r", sel)
 	}
 }
 
@@ -485,7 +485,7 @@ func TestPlainRepoPanelShowsFriendlyEmptyMessage(t *testing.T) {
 	}
 }
 
-// A Plain sidebar entry launches exactly like any other repo — claude, codex,
+// A Plain sidebar entry launches exactly like any other repo — claude, Codex Desktop,
 // and shell all just emit Kind=repo at its Path, unchanged from emitRepo.
 func TestPlainRepoLaunchesClaudeCodexShell(t *testing.T) {
 	m := plainModel(t)
@@ -496,7 +496,7 @@ func TestPlainRepoLaunchesClaudeCodexShell(t *testing.T) {
 	}
 
 	codex := step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
-	if sel := codex.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "codex" {
+	if sel := codex.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "codex-desktop" {
 		t.Errorf("alt+enter on plain entry = %+v", sel)
 	}
 
@@ -540,7 +540,7 @@ func TestPlainRepoLaunchesFromPanelFocusToo(t *testing.T) {
 	}
 
 	codex := step(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
-	if sel := codex.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "codex" {
+	if sel := codex.Selection(); sel == nil || sel.RepoRoot != "/home/u" || sel.Tool != "codex-desktop" {
 		t.Errorf("alt+enter from panel focus on a plain scope = %+v", sel)
 	}
 

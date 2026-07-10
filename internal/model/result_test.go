@@ -10,6 +10,7 @@ func TestSelectionEncode(t *testing.T) {
 	}{
 		{"pr", Selection{Kind: KindPR, RepoRoot: "/r", Ref: "289", Tool: "claude"}, "v1\tpr\t/r\t289\tclaude\t\n"},
 		{"pr-codex", Selection{Kind: KindPR, RepoRoot: "/r", Ref: "289", Tool: "codex"}, "v1\tpr\t/r\t289\tcodex\t\n"},
+		{"pr-codex-desktop", Selection{Kind: KindPR, RepoRoot: "/r", Ref: "289", Tool: "codex-desktop"}, "v1\tpr\t/r\t289\tcodex-desktop\t\n"},
 		{"branch", Selection{Kind: KindBranch, RepoRoot: "/r", Ref: "feat/x", Tool: "lazygit"}, "v1\tbranch\t/r\tfeat/x\tlazygit\t\n"},
 		{"branch-with-base", Selection{Kind: KindBranch, RepoRoot: "/r", Ref: "feat/x", Tool: "claude", Base: "origin/dev"}, "v1\tbranch\t/r\tfeat/x\tclaude\torigin/dev\n"},
 		{"worktree", Selection{Kind: KindWorktree, RepoRoot: "/r", Ref: "/wt/pr289", Tool: "serie"}, "v1\tworktree\t/r\t/wt/pr289\tserie\t\n"},
@@ -26,12 +27,13 @@ func TestSelectionEncode(t *testing.T) {
 
 func TestTargetTool(t *testing.T) {
 	cases := map[Target]string{
-		TargetDefault: "claude",
-		TargetClaude:  "claude",
-		TargetCodex:   "codex",
-		TargetLazygit: "lazygit",
-		TargetSerie:   "serie",
-		TargetShell:   "shell",
+		TargetDefault:      "claude",
+		TargetClaude:       "claude",
+		TargetCodex:        "codex",
+		TargetCodexDesktop: "codex-desktop",
+		TargetLazygit:      "lazygit",
+		TargetSerie:        "serie",
+		TargetShell:        "shell",
 	}
 	for tgt, want := range cases {
 		if got := tgt.Tool(); got != want {

@@ -645,7 +645,7 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyTab, tea.KeyEnter:
 		// Tab is a plain alias of Enter (least-resistance launch from wherever focus
 		// already is), not a focus toggle — ←/→ (below) move focus instead. Alt+Enter
-		// (and Alt+Tab, for symmetry) launches codex instead of claude; see the
+		// (and Alt+Tab, for symmetry) launches Codex Desktop instead of Claude; see the
 		// Ctrl+O comment below for why a modifier key is the only reliable way to
 		// distinguish this from plain Enter.
 		return m.launchFromKey(msg)
@@ -695,7 +695,7 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.prefetchFocusedRepo()
 	case tea.KeyCtrlO, tea.KeyCtrlJ:
 		// Shift+Enter arrives at the terminal layer as ctrl+j (probe-confirmed against
-		// real Warp), so KeyCtrlJ is the third Enter-modifier: ⏎ claude · ⌥⏎ codex ·
+		// real Warp), so KeyCtrlJ is the third Enter-modifier: ⏎ claude · ⌥⏎ Codex app ·
 		// ⇧⏎ shell. Ctrl+O stays bound to the same launch as an always-works alias —
 		// 'o' keeps the mnemonic from `;o`, and it doesn't depend on Shift+Enter being
 		// delivered as ctrl+j (a terminal-encoding detail another terminal could differ
@@ -1140,14 +1140,14 @@ func (m Model) launch(t model.Target) (tea.Model, tea.Cmd) {
 }
 
 // launchFromKey resolves an Enter/Tab keypress to a launch: claude by default,
-// codex when the Alt modifier is set (Option+Enter on a Mac keyboard — the only
+// Codex Desktop when the Alt modifier is set (Option+Enter on a Mac keyboard — the only
 // Enter-modifier this terminal stack can distinguish from plain Enter; see the
 // Ctrl+O comment above for why Shift/Ctrl+Enter can't be used the same way).
 func (m Model) launchFromKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	t := model.TargetDefault
 	if msg.Alt {
-		t = model.TargetCodex
+		t = model.TargetCodexDesktop
 	}
 	return m.launch(t)
 }
@@ -1508,7 +1508,7 @@ func (m Model) renderFooter(w int) string {
 		hint = styErr.Render(verb+" with "+what+" — DISCARD them?  ") +
 			styHeading.Render("y") + styHint.Render(" discard · ") + styHeading.Render("n") + styHint.Render(" keep")
 	case m.awaiting: // leader pressed: show the tool/action menu it unlocks
-		menu := "c claude · x codex · l lazygit · s serie · o shell · n new"
+		menu := "c claude · x codex CLI · l lazygit · s serie · o shell · n new"
 		if m.focus == focusMain && m.view == model.ViewBranches {
 			menu += " · f fetch · p pull · d del · D clean"
 		} else if m.focus == focusMain && m.view == model.ViewWorktrees {
@@ -1528,9 +1528,9 @@ func (m Model) renderFooter(w int) string {
 		if m.filterStr != "" {
 			clear = "esc clear · "
 		}
-		nav := "type to filter · ↑↓ move · ←→ view/sidebar · enter/tab claude · ⌥enter codex · ⇧enter shell · ⇧tab back · "
+		nav := "type to filter · ↑↓ move · ←→ view/sidebar · enter/tab claude · ⌥enter Codex app · ⇧enter shell · ⇧tab back · "
 		if m.focus == focusSidebar {
-			nav = "type to filter · ↑↓ repo · enter/tab claude · ⌥enter codex · ⇧enter shell · ←→ browse · "
+			nav = "type to filter · ↑↓ repo · enter/tab claude · ⌥enter Codex app · ⇧enter shell · ←→ browse · "
 		}
 		hint = styHint.Render(clear+nav) +
 			styHeading.Render("; tools/actions") + styHint.Render(" · ^C quit")
@@ -1595,7 +1595,7 @@ func (m Model) renderPanel(w, h int) string {
 		body = styErr.Render("⚠ " + m.errMsg[m.view])
 	case stateEmpty:
 		if m.scopedIdx >= 0 && m.scopedIdx < len(m.repos) && m.repos[m.scopedIdx].Plain {
-			body = styMeta.Render("Not a git repo — nothing to browse. ⏎ claude · ⌥⏎ codex · ⇧⏎ shell.")
+			body = styMeta.Render("Not a git repo — nothing to browse. ⏎ claude · ⌥⏎ Codex app · ⇧⏎ shell.")
 		} else {
 			body = styMeta.Render(emptyMsg(m.view))
 		}

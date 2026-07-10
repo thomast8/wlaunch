@@ -4,7 +4,7 @@ A unified launcher TUI for a git / PR / worktree workflow. One terminal UI that
 replaces a pile of single-purpose launchers: a repo sidebar on the left, and a
 main panel that switches between a repo's **PRs**, **branches**, **worktrees**,
 and an **Actionable** view of PRs that need you. Open any selection in `claude`,
-`codex`, `lazygit`, `serie`, or a plain shell — landing in the right worktree
+Codex CLI, Codex Desktop, `lazygit`, `serie`, or a plain shell — landing in the right worktree
 every time.
 
 The **Actionable** view triages PRs by the least-friction, highest-impact next
@@ -44,7 +44,7 @@ v1<TAB><kind><TAB><repo_root><TAB><ref><TAB><tool><TAB><base>
 | kind | `pr` \| `branch` \| `worktree` \| `repo` | what was picked |
 | repo_root | absolute path | the repo's primary checkout (the `git worktree list` root), whatever branch it happens to be on |
 | ref | PR number \| branch name \| worktree path \| (empty) | the thing to open |
-| tool | `claude` \| `codex` \| `lazygit` \| `serie` \| `shell` | what to launch after `cd` |
+| tool | `claude` \| `codex` \| `codex-desktop` \| `lazygit` \| `serie` \| `shell` | what to launch after `cd` |
 | base | branch/ref \| (empty) | for a new-branch worktree, the ref to branch from; empty lets `worktree-setup.sh` auto-detect origin's default. Empty for every other kind. |
 
 The wrapper maps `kind` → a directory (reusing `pr-worktree.sh` /
@@ -79,10 +79,10 @@ it just stops drawing it — and re-marks the same row when you arrow back in.
 | `Shift+Tab` (panel) | jump straight back to the sidebar from any tab |
 | `enter` / `tab` (sidebar) | launch claude through the repo's primary checkout. The shell dispatcher safely reconciles it onto the default branch first. This is the fast path when you just want to jump into a repo (same target as `;c` from the sidebar). `tab` is a plain alias of `enter`; it no longer toggles focus |
 | `enter` / `tab` (panel) | launch the selection in claude (the default action) |
-| `⌥enter` (Option+Enter, either focus) | same as `enter`, but launches codex instead of claude (Ctrl+Enter can't be detected by terminals as distinct from plain Enter, but Alt+Enter can) |
+| `⌥enter` (Option+Enter, either focus) | open the resolved repo/worktree in Codex Desktop via `codex app <path>` (Ctrl+Enter can't be detected by terminals as distinct from plain Enter, but Alt+Enter can) |
 | `⇧enter` (Shift+Enter, either focus) | same as `enter`, but opens a plain shell instead of claude. Terminals deliver Shift+Enter as the same byte as `Ctrl+J`, so pressing literal Ctrl+J does this too — harmless, just worth knowing |
 | `Ctrl+O` (either focus) | the same shell launch as `⇧enter` — an always-works alias that doesn't depend on how a given terminal encodes Shift+Enter (`o` = open) |
-| `;` then `c` `l` `s` `o` `x` | open the selection (or, from the sidebar, the safely reconciled primary checkout) in claude / lazygit / serie / a plain shell / codex — `;x` is the always-works fallback for codex regardless of whether `⌥enter` reaches your terminal |
+| `;` then `c` `l` `s` `o` `x` | open the selection (or, from the sidebar, the safely reconciled primary checkout) in claude / lazygit / serie / a plain shell / Codex CLI — `;x` keeps terminal Codex available while `⌥enter` targets the Desktop app |
 | `;` then `n` (any view) | create a new-branch worktree in the scoped repo (or the highlighted sidebar repo). Two-stage prompt: a **name** (placeholder is a random `adjective-noun` slug — empty Enter takes it) then a **base** to branch from (placeholder is the repo's detected default branch — empty Enter lets the script auto-detect origin's default). So two Enters = "random name off the default branch" |
 | `;` then `f` (branches) | fetch the selected branch's upstream ref (refmap-scoped, so a broken ref elsewhere can't fail it) |
 | `;` then `p` (branches) | pull / fast-forward the selected branch (ff-only, safe; in-place for checked-out branches) |

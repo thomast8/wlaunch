@@ -19,7 +19,7 @@ type Selection struct {
 	Kind     Kind
 	RepoRoot string // absolute main-checkout root; always set
 	Ref      string // PR number | branch name | worktree path | "" for repo
-	Tool     string // claude | codex | lazygit | serie | shell
+	Tool     string // claude | codex | codex-desktop | lazygit | serie | shell
 	Base     string // ref a new-branch worktree is created from; "" = let the script auto-detect. Only meaningful for KindBranch.
 }
 
